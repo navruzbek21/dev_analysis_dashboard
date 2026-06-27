@@ -1,0 +1,20 @@
+dash==2.17.1
+dash-bootstrap-components==1.6.0
+plotly
+pandas
+numpy
+sqlalchemy>=2.0
+flask-caching
+redis
+cachetools
+orjson
+pyarrow
+python-dotenv
+gunicorn; platform_system != "Windows"
+waitress; platform_system == "Windows"
+psycopg[binary]; platform_system != "Windows"
+pyodbc
+scikit-learn
+statsmodels
+pytest
+pytest-mock
