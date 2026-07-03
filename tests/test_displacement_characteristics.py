@@ -77,3 +77,32 @@ def test_displacement_methods_use_original_formula_axes():
     assert pirverdyan.layout.xaxis.title.text == "1 / √(накопленная добыча жидкости)"
     assert kambarov.layout.xaxis.title.text == "1 / накопленная добыча жидкости"
     assert sazonov.layout.yaxis.title.text == "Накопленная добыча нефти, т"
+
+
+
+def test_asset_year_aggregate_calculates_missing_cumulative_inputs_for_selected_area():
+    source = pd.DataFrame(
+        {
+            "year": [2020, 2021, 2022],
+            "dobycha_liq": [15.0, 30.0, 45.0],
+            "dobycha_nefti": [10.0, 20.0, 30.0],
+            "dobycha_vody": [5.0, 10.0, 15.0],
+            "zakachka": [3.0, 4.0, 5.0],
+            "dob_fond": [1.0, 2.0, 3.0],
+            "nagn_fond": [1.0, 1.0, 1.0],
+            "kin": [10.0, 20.0, 30.0],
+        }
+    )
+
+    aggregate = compute_asset_year_aggregate(source)
+
+    assert aggregate["dobycha_nefti_cum"].tolist() == [10.0, 30.0, 60.0]
+    assert aggregate["dobycha_vody_cum"].tolist() == [5.0, 15.0, 30.0]
+    assert aggregate["dobycha_liq_cum"].tolist() == [15.0, 45.0, 90.0]
+    assert aggregate["vnf_nak"].tolist() == [0.5, 0.5, 0.5]
+
+    fig = displacement_characteristic_figure(aggregate, "sazonov", "Сазонов", [2020, 2022])
+
+    assert fig.layout.xaxis.title.text == "LN(накопленная добыча жидкости)"
+
+
