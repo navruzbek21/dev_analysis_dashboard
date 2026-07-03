@@ -75,7 +75,9 @@ def test_displacement_trend_line_goes_from_period_end_to_target():
 
     assert trend_trace.x[0] == yearly.loc[yearly["year"] == 2023, "dobycha_vody_cum"].map(np.log).iloc[0]
     assert trend_trace.x[-1] == target_trace.x[0]
+
     assert target_trace.customdata[0][0] > yearly["dobycha_nefti_cum"].max()
+
 
 
 def test_displacement_methods_use_original_formula_axes():
