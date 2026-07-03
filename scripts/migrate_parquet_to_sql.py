@@ -1,15 +1,16 @@
 import argparse
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, insert, text
 
 from config import settings
 from db import engine
 from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, normalize_data, validate_area_ngdu_uniqueness
-from repositories.metrics_repository import area_year_metrics, dashboard_metadata, dim_area, monthly_metrics
+from repositories.metrics_repository import area_year_metrics, dashboard_metadata, dim_area, metadata, monthly_metrics
 
 
 MONTHLY_COLUMNS = [
@@ -69,6 +70,21 @@ YEAR_COLUMNS = [
     "dataset_version",
     "loaded_at",
 ]
+
+
+
+def _wait_for_database(timeout_seconds=60, interval_seconds=2):
+    deadline = time.monotonic() + timeout_seconds
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(interval_seconds)
+    raise RuntimeError("Database is not ready for parquet-to-SQL migration") from last_error
 
 
 def _ensure_columns(df, columns):
@@ -150,6 +166,8 @@ def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
         print(json.dumps({"dry_run": True, **report}, ensure_ascii=False, indent=2))
         return report
 
+    _wait_for_database()
+    metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(delete(monthly_metrics).where(monthly_metrics.c.dataset_version == dataset_version))
         connection.execute(delete(area_year_metrics).where(area_year_metrics.c.dataset_version == dataset_version))

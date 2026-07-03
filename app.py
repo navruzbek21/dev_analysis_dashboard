@@ -679,6 +679,144 @@ def scatter_metric(d, x, y, title, x_title=None, y_title=None, log_x=False, show
     return apply_theme(fig, height=440, compact=True)
 
 
+DISPLACEMENT_CHARACTERISTICS = {
+    "pirverdyan": {
+        "x_column": "dobycha_liq_cum",
+        "x_transform": "inv_sqrt",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "1 / √Qж нак.",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B / √Qж",
+    },
+    "wor": {
+        "x_column": "dobycha_nefti_cum",
+        "y_column": "vnf_tek",
+        "y_transform": "ln",
+        "x_title": "Qн нак., т",
+        "y_title": "LN(ВНФ тек.)",
+        "formula": "LN(ВНФ) = A + B · Qн",
+    },
+    "kambarov": {
+        "x_column": "dobycha_liq_cum",
+        "x_transform": "inverse",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "1 / Qж нак.",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B / Qж",
+    },
+    "sazonov": {
+        "x_column": "dobycha_liq_cum",
+        "x_transform": "ln",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "LN(Qж нак.)",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B · LN(Qж)",
+    },
+    "maximov": {
+        "x_column": "dobycha_vody_cum",
+        "x_transform": "ln",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "LN(Qв нак.)",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B · LN(Qв)",
+    },
+}
+
+
+def _transform_displacement_series(series, transform):
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    if transform == "ln":
+        return np.log(values.where(values > 0))
+    if transform == "inverse":
+        return 1 / values.where(values > 0)
+    if transform == "inv_sqrt":
+        return 1 / np.sqrt(values.where(values > 0))
+    return values
+
+
+def _normalize_year_bound(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def displacement_characteristic(d, method_key, title, year_start=None, year_end=None):
+    """График характеристики вытеснения по выбранной площади/фильтру."""
+    config = DISPLACEMENT_CHARACTERISTICS[method_key]
+    x_col = config["x_column"]
+    y_col = config["y_column"]
+    required = [x_col, y_col, AREA_COL_YEAR, "year"]
+    miss = [c for c in required if c not in d.columns]
+    if d.empty or miss:
+        return empty_fig(f"Нет данных: {', '.join(miss)}", height=440)
+
+    year_start = _normalize_year_bound(year_start)
+    year_end = _normalize_year_bound(year_end)
+    if year_start is not None and year_end is not None and year_start > year_end:
+        year_start, year_end = year_end, year_start
+
+    dd = d[required + [c for c in ["ngdu", "mest"] if c in d.columns]].copy()
+    dd["year"] = pd.to_numeric(dd["year"], errors="coerce")
+    if year_start is not None:
+        dd = dd[dd["year"] >= year_start]
+    if year_end is not None:
+        dd = dd[dd["year"] <= year_end]
+    if dd.empty:
+        return empty_fig("Нет точек в выбранном периоде", height=440)
+
+    dd["x_value"] = _transform_displacement_series(dd[x_col], config.get("x_transform"))
+    dd["y_value"] = _transform_displacement_series(dd[y_col], config.get("y_transform"))
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=["x_value", "y_value"]).sort_values([AREA_COL_YEAR, "year"])
+    if dd.empty:
+        return empty_fig("Нет точек после фильтрации", height=440)
+
+    hover_data = {
+        "year": True,
+        "x_value": ":.4f",
+        "y_value": ":.2f",
+        AREA_COL_YEAR: True,
+    }
+    if "ngdu" in dd.columns:
+        hover_data["ngdu"] = True
+    if "mest" in dd.columns:
+        hover_data["mest"] = True
+
+    fig = px.scatter(
+        dd,
+        x="x_value",
+        y="y_value",
+        color=AREA_COL_YEAR,
+        hover_data=hover_data,
+        trendline="ols",
+        labels={
+            "x_value": config["x_title"],
+            "y_value": config["y_title"],
+            AREA_COL_YEAR: "Площадь",
+            "year": "Год",
+            "ngdu": "НГДУ",
+            "mest": "Месторождение",
+        },
+    )
+    fig.update_traces(marker=dict(size=7, opacity=0.84), selector=dict(mode="markers"))
+    for tr in fig.data:
+        if getattr(tr, "mode", None) == "lines":
+            tr.showlegend = False
+            tr.line.width = 1.6
+            tr.line.dash = "dash"
+    period_label = ""
+    if year_start is not None or year_end is not None:
+        period_label = f"; период: {year_start or '…'}–{year_end or '…'}"
+    fig.update_layout(
+        title=dict(text=f"{title}<br><sup>{config['formula']}{period_label}</sup>"),
+        xaxis_title=config["x_title"],
+        yaxis_title=config["y_title"],
+    )
+    return apply_theme(fig, height=440, compact=True)
+
+
 
 
 
@@ -1103,6 +1241,11 @@ ANALYSIS_SPECS = [
     ("g20", "ratio_dob_nagn", "q_priem_q_liq", "20. Соотношение доб/наг от Qприем/Qжидк", "Qприем/Qжидк", "Доб/Нагн"),
     ("g21", "kompens_tek", "kin", "21. Компенсация текущая от КИН", "КИН, %", "Компенсация текущая, %"),
     ("g22", "kin", "vnf_tek", "22. КИН от LN(ВНФ тек.)", "LN(ВНФ тек.)", "КИН, %"),
+    ("g_disp_pirverdyan", None, None, "23. Характеристика вытеснения по Пирвердяну", "1 / √Qж нак.", "Qн нак., т"),
+    ("g_disp_wor", None, None, "24. Характеристика по водонефтяному фактору", "Qн нак., т", "LN(ВНФ тек.)"),
+    ("g_disp_kambarov", None, None, "25. Характеристика вытеснения по Камбарову", "1 / Qж нак.", "Qн нак., т"),
+    ("g_disp_sazonov", None, None, "26. Характеристика вытеснения по Сазонову", "LN(Qж нак.)", "Qн нак., т"),
+    ("g_disp_maximov", None, None, "27. Характеристика вытеснения по Максимову", "LN(Qв нак.)", "Qн нак., т"),
 ]
 
 PRIMARY_ASSET_SPEC_IDS = {"g16", "g20"}
@@ -1262,9 +1405,53 @@ def asset_tab_layout():
                 ]
             ),
             dbc.Row([dbc.Col(graph_card("11. Степень прокачки/промывки и темпы от КИН", "g11", "560px"), lg=12, className="mb-4")]),
-            html.Div(
-                html.Button("Построить дополнительные метрики", id="build-extra-metrics", n_clicks=0, className="btn-reset extra-metrics-button"),
-                className="extra-metrics-actions mb-4",
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            html.Label("Период характеристик вытеснения: с"),
+                            dcc.Input(
+                                id="displacement-year-start",
+                                type="number",
+                                min=1900,
+                                max=2200,
+                                step=1,
+                                placeholder="2020",
+                                className="form-control",
+                            ),
+                        ],
+                        lg=3,
+                        md=6,
+                        className="mb-3",
+                    ),
+                    dbc.Col(
+                        [
+                            html.Label("по"),
+                            dcc.Input(
+                                id="displacement-year-end",
+                                type="number",
+                                min=1900,
+                                max=2200,
+                                step=1,
+                                placeholder="2025",
+                                className="form-control",
+                            ),
+                        ],
+                        lg=3,
+                        md=6,
+                        className="mb-3",
+                    ),
+                    dbc.Col(
+                        html.Div(
+                            html.Button("Построить дополнительные метрики", id="build-extra-metrics", n_clicks=0, className="btn-reset extra-metrics-button"),
+                            className="extra-metrics-actions",
+                        ),
+                        lg=6,
+                        className="mb-3",
+                    ),
+                ],
+                align="end",
+                className="mb-1",
             ),
             html.Div(
                 [
@@ -1598,13 +1785,21 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
     )
 
 
-def _build_analysis_figure(spec_id, y, x, title, x_title, y_title, d, period_result):
+def _build_analysis_figure(spec_id, y, x, title, x_title, y_title, d, period_result, displacement_year_start=None, displacement_year_end=None):
     if spec_id == "g17":
         return niz_otbor_vs_wc_identity(d)
     if spec_id == "g16":
         return segmented_wc_kiz(d, period_result=period_result)
     if spec_id == "g20":
         return ratio_vs_q_by_wc_kiz_periods(d, period_result=period_result)
+    if spec_id.startswith("g_disp_"):
+        return displacement_characteristic(
+            d,
+            spec_id.removeprefix("g_disp_"),
+            title,
+            year_start=displacement_year_start,
+            year_end=displacement_year_end,
+        )
     return scatter_metric(
         d,
         x=x,
@@ -1701,9 +1896,11 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
+    Input("displacement-year-start", "value"),
+    Input("displacement-year-end", "value"),
     Input("theme-store", "data"),
 )
-def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, theme):
+def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, displacement_year_start, displacement_year_end, theme):
     if not n_clicks:
         hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * len(ADDITIONAL_ANALYSIS_SPECS)
         return [{"display": "none"}] + hidden_figs
@@ -1737,6 +1934,8 @@ def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, sele
                     y_title,
                     d,
                     period_result,
+                    displacement_year_start,
+                    displacement_year_end,
                 ),
             )
         )

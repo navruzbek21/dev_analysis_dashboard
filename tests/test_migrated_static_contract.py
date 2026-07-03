@@ -29,6 +29,11 @@ EXPECTED_ANALYSIS_ORDER = [
     "g20",
     "g21",
     "g22",
+    "g_disp_pirverdyan",
+    "g_disp_wor",
+    "g_disp_kambarov",
+    "g_disp_sazonov",
+    "g_disp_maximov",
 ]
 
 

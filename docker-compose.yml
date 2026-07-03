@@ -4,17 +4,40 @@ services:
     ports: 
       - "8048:8048" 
     environment: 
-      DATA_SOURCE: parquet 
+      DATA_SOURCE: sql
+      DATABASE_URL: postgresql://dashboard:dashboard@postgres:5432/dashboard
       APP_HOST: 0.0.0.0 
       APP_PORT: 8048 
       APP_DEBUG: "false" 
       REDIS_URL: redis://redis:6379/0 
-      PARQUET_MONTHLY_PATH: df2.parquet 
-      PARQUET_YEARLY_PATH: df_ploshad_year.parquet 
+      PARQUET_MONTHLY_PATH: ${PARQUET_MONTHLY_PATH:-df2.parquet}
+      PARQUET_YEARLY_PATH: ${PARQUET_YEARLY_PATH:-df_ploshad_year.parquet}
     depends_on: 
-      - redis 
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
     volumes: 
       - .:/app 
+
+  migrate:
+    build: .
+    command: >
+      python -m scripts.migrate_parquet_to_sql
+      --monthly ${PARQUET_MONTHLY_PATH:-df2.parquet}
+      --yearly ${PARQUET_YEARLY_PATH:-df_ploshad_year.parquet}
+      --dataset-version ${DATASET_VERSION:-local-parquet-v1}
+    environment:
+      DATA_SOURCE: sql
+      DATABASE_URL: postgresql://dashboard:dashboard@postgres:5432/dashboard
+      REDIS_URL: redis://redis:6379/0
+      PARQUET_MONTHLY_PATH: ${PARQUET_MONTHLY_PATH:-df2.parquet}
+      PARQUET_YEARLY_PATH: ${PARQUET_YEARLY_PATH:-df_ploshad_year.parquet}
+    depends_on:
+      postgres:
+        condition: service_started
+    volumes:
+      - .:/app
         
   redis: 
     image: redis:7 
