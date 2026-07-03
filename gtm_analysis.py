@@ -485,21 +485,78 @@ def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
     })
 
 
+def _group_metric_mean(df: pd.DataFrame, keys: list[str], value_columns: list[str], suffix: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=keys + [f"{column}_{suffix}" for column in value_columns])
+    return (
+        df.groupby(keys, dropna=False, sort=False)[value_columns]
+        .mean()
+        .add_suffix(f"_{suffix}")
+        .reset_index()
+    )
+
+
+def _first_by_month_offset(df: pd.DataFrame, keys: list[str], value_columns: list[str], suffix: str, ascending: bool) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=keys + [f"{column}_{suffix}" for column in value_columns])
+    first_rows = df.sort_values(keys + ["month_offset"], ascending=[True, True, ascending]).drop_duplicates(keys, keep="first")
+    return first_rows[keys + value_columns].rename(columns={column: f"{column}_{suffix}" for column in value_columns})
+
+
 def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
-    """Тяжёлый расчёт уровня ГТМ выполняется один раз при старте."""
+    """Быстрый расчёт уровня ГТМ без groupby.apply по каждой скважине.
+
+    Вкладка ГТМ строит все основные графики из этого агрегата. Предыдущая
+    реализация вызывала Python-функцию для каждой пары ``well``/``gtm_date``;
+    на больших parquet-файлах это надолго блокировало Dash callback и вкладка
+    оставалась в состоянии Updating. Здесь те же бизнес-правила выражены через
+    векторные groupby/merge операции Pandas.
+    """
     required = {"well", "gtm_date", "month_offset", "qliq", "qoil", "gtm_year"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"В result_df не хватает столбцов: {sorted(missing)}")
 
-    gtm_level = (
-        df.groupby(["well", "gtm_date"], dropna=False, sort=False, group_keys=False)
-        .apply(calc_delta_per_gtm)
-        .reset_index()
-    )
-    gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
-    return gtm_level
+    keys = ["well", "gtm_date"]
+    value_columns = ["qliq", "qoil"]
+    grouped = df.groupby(keys, dropna=False, sort=False)
+    gtm_level = grouped.agg(
+        gtm_year=("gtm_year", "first"),
+        назначение=("назнач_скв_факт", "first") if "назнач_скв_факт" in df.columns else ("gtm_year", lambda _s: "Не указано"),
+        направление=("направление", "first") if "направление" in df.columns else ("gtm_year", lambda _s: np.nan),
+        mest=("mest", "first") if "mest" in df.columns else ("gtm_year", lambda _s: np.nan),
+        plosh=("plosh", "first") if "plosh" in df.columns else ("gtm_year", lambda _s: np.nan),
+    ).reset_index()
+    gtm_level["назначение"] = gtm_level["назначение"].fillna("Не указано")
 
+    before = df[df["month_offset"].lt(0)]
+    min_before = before.groupby(keys, dropna=False, sort=False)["month_offset"].min().rename("min_before_offset").reset_index()
+    gtm_level = gtm_level.merge(min_before, on=keys, how="left")
+    last3_before = before[before["month_offset"].isin([-3, -2, -1])]
+    base_last3 = _group_metric_mean(last3_before, keys, value_columns, "base_last3")
+    base_fallback = _first_by_month_offset(before, keys, value_columns, "base_fallback", ascending=False)
+
+    after_1_3 = df[df["month_offset"].isin([1, 2, 3])]
+    after_positive = df[df["month_offset"].gt(0)]
+    after_preferred = _group_metric_mean(after_1_3, keys, value_columns, "after_1_3")
+    after_fallback = _first_by_month_offset(after_positive, keys, value_columns, "after_fallback", ascending=True)
+
+    for frame in [base_last3, base_fallback, after_preferred, after_fallback]:
+        gtm_level = gtm_level.merge(frame, on=keys, how="left")
+
+    has_far_history = gtm_level["min_before_offset"].le(-36).fillna(False)
+    qliq_before = gtm_level["qliq_base_last3"].combine_first(gtm_level["qliq_base_fallback"]).fillna(0.0)
+    qoil_before = gtm_level["qoil_base_last3"].combine_first(gtm_level["qoil_base_fallback"]).fillna(0.0)
+    qliq_before = qliq_before.mask(has_far_history, 0.0)
+    qoil_before = qoil_before.mask(has_far_history, 0.0)
+
+    qliq_after = gtm_level["qliq_after_1_3"].combine_first(gtm_level["qliq_after_fallback"])
+    qoil_after = gtm_level["qoil_after_1_3"].combine_first(gtm_level["qoil_after_fallback"])
+    gtm_level["Δqliq"] = qliq_after - qliq_before
+    gtm_level["Δqoil"] = qoil_after - qoil_before
+    gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
+
+    return gtm_level[keys + ["Δqliq", "Δqoil", "gtm_year", "назначение", "направление", "mest", "plosh", "effective"]]
 
 def filter_df(df: pd.DataFrame, direction=ALL, plosh=ALL, mest=ALL) -> pd.DataFrame:
     mask = pd.Series(True, index=df.index)
