@@ -25,6 +25,9 @@ def compute_asset_year_aggregate(d):
     for col in ["kin", "vnf_nak", "vnf_tek"]:
         if col in d.columns:
             agg_spec[col] = (col, "mean")
+    for col in ["dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"]:
+        if col in d.columns:
+            agg_spec[col] = (col, "sum")
     if "wc" in d.columns:
         agg_spec["wc"] = ("wc", "mean")
     elif "wc_month_avg" in d.columns:

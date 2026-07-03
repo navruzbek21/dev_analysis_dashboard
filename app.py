@@ -1098,29 +1098,102 @@ def _linear_predict(x_values, y_values, x_line):
     return np.polyval(coef, x_line_arr.ravel())
 
 
-def _displacement_x(vnf: pd.Series, method: str) -> pd.Series:
-    v = pd.to_numeric(vnf, errors="coerce")
-    if method == "ln_vnf":
-        return np.log(v.where(v > 0))
-    if method == "kambarov":
-        return 1 / (1 + v.where(v >= 0))
-    if method == "sazonov":
-        return np.log1p(v.where(v >= 0))
-    if method == "maksimov":
-        return 1 / v.where(v > 0)
-    return v
+
+def _positive_numeric(series: pd.Series) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    return values.where(values > 0)
 
 
-def _displacement_x_title(method: str, vnf_col: str) -> str:
+def _displacement_prepare_axes(dd: pd.DataFrame, method: str, vnf_col: str) -> tuple[pd.DataFrame, str, str, str]:
+    oil = _positive_numeric(dd["dobycha_nefti_cum"])
+    water = _positive_numeric(dd["dobycha_vody_cum"])
+    liquid = _positive_numeric(dd["dobycha_liq_cum"])
+    vnf = _positive_numeric(dd[vnf_col])
+
     if method == "ln_vnf":
-        return f"LN({vnf_col})"
+        dd["x_method"] = 1 / np.sqrt(liquid)
+        dd["y_method"] = oil
+        return dd, "1 / √(накопленная добыча жидкости)", "Накопленная добыча нефти, т", "oil_from_liquid_inv_sqrt"
     if method == "kambarov":
-        return f"1 / (1 + {vnf_col})"
+        dd["x_method"] = 1 / liquid
+        dd["y_method"] = oil
+        return dd, "1 / накопленная добыча жидкости", "Накопленная добыча нефти, т", "oil_from_liquid_inv"
     if method == "sazonov":
-        return f"LN(1 + {vnf_col})"
+        dd["x_method"] = np.log(liquid)
+        dd["y_method"] = oil
+        return dd, "LN(накопленная добыча жидкости)", "Накопленная добыча нефти, т", "oil_from_liquid_log"
     if method == "maksimov":
-        return f"1 / {vnf_col}"
-    return vnf_col
+        dd["x_method"] = np.log(water)
+        dd["y_method"] = oil
+        return dd, "LN(накопленная добыча воды)", "Накопленная добыча нефти, т", "oil_from_water_log"
+    dd["x_method"] = oil
+    dd["y_method"] = vnf
+    return dd, "Накопленная добыча нефти, т", "ВНФ накопленный", "vnf_from_oil"
+
+
+def _implied_recoverable_oil(dd: pd.DataFrame) -> float:
+    if "kin" not in dd.columns or "dobycha_nefti_cum" not in dd.columns:
+        return np.nan
+    reserve = safe_div(dd["dobycha_nefti_cum"], dd["kin"] / 100)
+    reserve = pd.Series(pd.to_numeric(reserve, errors="coerce")).replace([np.inf, -np.inf], np.nan).dropna()
+    reserve = reserve[reserve > 0]
+    if reserve.empty:
+        return np.nan
+    return float(reserve.median())
+
+
+def _kin_from_oil(target_oil: float, recoverable_oil: float) -> float:
+    if not np.isfinite(target_oil) or not np.isfinite(recoverable_oil) or recoverable_oil <= 0:
+        return np.nan
+    return float(target_oil / recoverable_oil * 100)
+
+
+def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
+    if not np.isfinite(oil_min) or oil_min <= 0:
+        oil_min = 1.0
+    if not np.isfinite(oil_max) or oil_max <= oil_min:
+        oil_max = oil_min * 2
+
+    def x_from_oil(oil_value):
+        if mode in {"oil_from_liquid_log"}:
+            return np.log(oil_value * (1 + target_vnf))
+        if mode in {"oil_from_liquid_inv"}:
+            return 1 / (oil_value * (1 + target_vnf))
+        if mode == "oil_from_water_log":
+            return np.log(oil_value * target_vnf)
+        if mode == "oil_from_liquid_inv_sqrt":
+            return 1 / np.sqrt(oil_value * (1 + target_vnf))
+        return oil_value
+
+    def residual(oil_value):
+        if mode == "vnf_from_oil":
+            return float(model_fn([oil_value])[0] - target_vnf)
+        return float(model_fn([x_from_oil(oil_value)])[0] - oil_value)
+
+    low = max(oil_min * 0.25, 1e-9)
+    high = oil_max * 1.5
+    last_high = high
+    for _ in range(40):
+        f_low = residual(low)
+        f_high = residual(high)
+        if np.isfinite(f_low) and np.isfinite(f_high) and f_low * f_high <= 0:
+            for _ in range(80):
+                mid = (low + high) / 2
+                f_mid = residual(mid)
+                if not np.isfinite(f_mid):
+                    break
+                if abs(f_mid) < 1e-6:
+                    return float(mid)
+                if f_low * f_mid <= 0:
+                    high = mid
+                    f_high = f_mid
+                else:
+                    low = mid
+                    f_low = f_mid
+            return float((low + high) / 2)
+        last_high = high
+        high *= 1.8
+    return float(last_high)
 
 
 def normalize_period_value(period_value):
@@ -1134,103 +1207,93 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
     if yearly_agg is None or yearly_agg.empty:
         return empty_fig("Нет данных для характеристики вытеснения", height=460)
     vnf_col = "vnf_nak" if "vnf_nak" in yearly_agg.columns else "vnf_tek"
-    required = ["year", "kin", vnf_col]
+    required = ["year", "kin", vnf_col, "dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"]
     missing = [col for col in required if col not in yearly_agg.columns]
     if missing:
         return empty_fig(f"Нет данных: {', '.join(missing)}", height=460)
 
     start_year, end_year = normalize_period_value(period_value)
     dd = yearly_agg[required].copy()
-    dd["year"] = pd.to_numeric(dd["year"], errors="coerce")
-    dd["kin"] = pd.to_numeric(dd["kin"], errors="coerce")
-    dd[vnf_col] = pd.to_numeric(dd[vnf_col], errors="coerce")
+    for col in required:
+        dd[col] = pd.to_numeric(dd[col], errors="coerce")
     dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=required)
-    dd = dd[dd[vnf_col] > 0].sort_values("year")
+    dd = dd[(dd[vnf_col] > 0) & (dd["dobycha_nefti_cum"] > 0)].sort_values("year")
     if dd.empty:
         return empty_fig("Нет точек после фильтрации", height=460)
 
-    dd["x_method"] = _displacement_x(dd[vnf_col], method)
-    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=["x_method", "kin"])
+    dd, x_title, y_title, target_mode = _displacement_prepare_axes(dd, method, vnf_col)
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=["x_method", "y_method", "kin", "dobycha_nefti_cum"])
     if dd.empty:
-        return empty_fig("Нет точек после преобразования ВНФ", height=460)
+        return empty_fig("Нет точек после преобразования характеристики", height=460)
 
     period_mask = dd["year"].between(start_year, end_year, inclusive="both")
-    trend_df = dd[period_mask].dropna(subset=["x_method", "kin"])
+    trend_df = dd[period_mask].dropna(subset=["x_method", "y_method"])
+    recoverable_oil = _implied_recoverable_oil(dd)
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=dd["x_method"],
-            y=dd["kin"],
-            mode="markers+lines",
-            name="Факт",
-            marker=dict(size=8, color=OP_GREEN),
-            line=dict(color=_rgba_from_hex(OP_GREEN, 0.35), width=1.5),
-            customdata=np.column_stack([dd["year"], dd[vnf_col]]),
-            hovertemplate="Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>КИН %{y:.2f}<extra></extra>",
-        )
-    )
+    common_customdata = np.column_stack([dd["year"], dd[vnf_col], dd["dobycha_nefti_cum"], dd["kin"]])
+    fig.add_trace(go.Scatter(
+        x=dd["x_method"], y=dd["y_method"], mode="markers+lines", name="Факт",
+        marker=dict(size=8, color=OP_GREEN), line=dict(color=_rgba_from_hex(OP_GREEN, 0.35), width=1.5),
+        customdata=common_customdata,
+        hovertemplate="Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>Нак. нефть %{customdata[2]:,.0f} т<br>КИН %{customdata[3]:.2f}%<extra></extra>",
+    ))
     if not trend_df.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=trend_df["x_method"],
-                y=trend_df["kin"],
-                mode="markers",
-                name=f"Период {start_year}-{end_year}",
-                marker=dict(size=11, color=OP_RED, symbol="circle-open", line=dict(width=2)),
-                customdata=np.column_stack([trend_df["year"], trend_df[vnf_col]]),
-                hovertemplate="Период тренда<br>Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>КИН %{y:.2f}<extra></extra>",
-            )
-        )
+        fig.add_trace(go.Scatter(
+            x=trend_df["x_method"], y=trend_df["y_method"], mode="markers", name=f"Период {start_year}-{end_year}",
+            marker=dict(size=11, color=OP_RED, symbol="circle-open", line=dict(width=2)),
+            customdata=np.column_stack([trend_df["year"], trend_df[vnf_col], trend_df["dobycha_nefti_cum"], trend_df["kin"]]),
+            hovertemplate="Период тренда<br>Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>Нак. нефть %{customdata[2]:,.0f} т<br>КИН %{customdata[3]:.2f}%<extra></extra>",
+        ))
 
     if len(trend_df) >= 2:
-        target_x = float(_displacement_x(pd.Series([DISPLACEMENT_TARGET_VNF]), method).iloc[0])
+        def predict(xs):
+            return _linear_predict(trend_df["x_method"], trend_df["y_method"], xs)
+
+        target_oil = _solve_target_oil_from_vnf(predict, DISPLACEMENT_TARGET_VNF, target_mode, dd["dobycha_nefti_cum"].min(), dd["dobycha_nefti_cum"].max())
+        target_kin = _kin_from_oil(target_oil, recoverable_oil)
+        if target_mode == "vnf_from_oil":
+            target_x = target_oil
+            target_y = DISPLACEMENT_TARGET_VNF
+        elif target_mode == "oil_from_water_log":
+            target_x = np.log(target_oil * DISPLACEMENT_TARGET_VNF)
+            target_y = target_oil
+        elif target_mode == "oil_from_liquid_inv":
+            target_x = 1 / (target_oil * (1 + DISPLACEMENT_TARGET_VNF))
+            target_y = target_oil
+        elif target_mode == "oil_from_liquid_inv_sqrt":
+            target_x = 1 / np.sqrt(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
+            target_y = target_oil
+        else:
+            target_x = np.log(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
+            target_y = target_oil
+
         x_min = float(trend_df["x_method"].min())
         x_max = float(trend_df["x_method"].max())
         x_line = np.linspace(min(x_min, target_x), max(x_max, target_x), 80)
-        y_line = _linear_predict(trend_df["x_method"], trend_df["kin"], x_line)
-        target_y = float(_linear_predict(trend_df["x_method"], trend_df["kin"], [target_x])[0])
-        fig.add_trace(
-            go.Scatter(
-                x=x_line,
-                y=y_line,
-                mode="lines",
-                name=f"Тренд {start_year}-{end_year} до ВНФ=49",
-                line=dict(color=OP_RED, width=2.4, dash="dash"),
-                hovertemplate="Тренд<br>КИН %{y:.2f}<extra></extra>",
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[target_x],
-                y=[target_y],
-                mode="markers+text",
-                name="Прогноз при ВНФ=49",
-                marker=dict(size=12, color=OP_AMBER, symbol="diamond"),
-                text=[f"ВНФ=49; КИН={target_y:.2f}"],
-                textposition="top center",
-                hovertemplate="ВНФ=49<br>КИН %{y:.2f}<extra></extra>",
-            )
-        )
+        y_line = predict(x_line)
+        fig.add_trace(go.Scatter(
+            x=x_line, y=y_line, mode="lines", name=f"Тренд {start_year}-{end_year} до ВНФ=49",
+            line=dict(color=OP_RED, width=2.4, dash="dash"),
+            hovertemplate=f"Тренд<br>{y_title} %{{y:,.2f}}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=[target_x], y=[target_y], mode="markers+text", name="Прогноз при ВНФ=49",
+            marker=dict(size=12, color=OP_AMBER, symbol="diamond"),
+            text=[f"ВНФ=49; Qн={target_oil:,.0f} т; КИН={target_kin:.2f}%"], textposition="top center",
+            customdata=[[target_oil, target_kin]],
+            hovertemplate="ВНФ=49<br>Нак. нефть %{customdata[0]:,.0f} т<br>КИН %{customdata[1]:.2f}%<extra></extra>",
+        ))
     else:
-        fig.add_annotation(
-            text="Для тренда нужны минимум 2 точки в выбранном периоде",
-            xref="paper",
-            yref="paper",
-            x=0.5,
-            y=0.96,
-            showarrow=False,
-            font=dict(color=OP_MUTED, size=11),
-        )
+        fig.add_annotation(text="Для тренда нужны минимум 2 точки в выбранном периоде", xref="paper", yref="paper", x=0.5, y=0.96, showarrow=False, font=dict(color=OP_MUTED, size=11))
 
     fig.update_layout(
-        xaxis_title=_displacement_x_title(method, vnf_col),
-        yaxis_title="КИН, %",
+        xaxis_title=x_title,
+        yaxis_title=y_title,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=56, r=28, t=64, b=54),
     )
     return apply_theme(fig, height=460, compact=True)
-
 
 def displacement_card(title, graph_id, slider_id):
     return html.Div(
