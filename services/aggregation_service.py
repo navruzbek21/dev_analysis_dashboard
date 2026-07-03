@@ -22,15 +22,33 @@ def compute_asset_year_aggregate(d):
         dob_fond=("dob_fond", "sum"),
         nagn_fond=("nagn_fond", "sum"),
     )
+    if "dobycha_vody" in d.columns:
+        agg_spec["dobycha_vody"] = ("dobycha_vody", "sum")
     for col in ["kin", "vnf_nak", "vnf_tek"]:
         if col in d.columns:
             agg_spec[col] = (col, "mean")
+    for col in ["dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"]:
+        if col in d.columns:
+            agg_spec[col] = (col, "sum")
     if "wc" in d.columns:
         agg_spec["wc"] = ("wc", "mean")
     elif "wc_month_avg" in d.columns:
         agg_spec["wc"] = ("wc_month_avg", "mean")
 
     aggregate = d.groupby("year", as_index=False).agg(**agg_spec).sort_values("year")
+
+    cumulative_sources = {
+        "dobycha_nefti_cum": "dobycha_nefti",
+        "dobycha_vody_cum": "dobycha_vody",
+        "dobycha_liq_cum": "dobycha_liq",
+    }
+    for cumulative_col, annual_col in cumulative_sources.items():
+        if cumulative_col not in aggregate.columns and annual_col in aggregate.columns:
+            aggregate[cumulative_col] = aggregate[annual_col].cumsum()
+    if "vnf_tek" not in aggregate.columns and {"dobycha_vody", "dobycha_nefti"}.issubset(aggregate.columns):
+        aggregate["vnf_tek"] = safe_div(aggregate["dobycha_vody"], aggregate["dobycha_nefti"])
+    if "vnf_nak" not in aggregate.columns and {"dobycha_vody_cum", "dobycha_nefti_cum"}.issubset(aggregate.columns):
+        aggregate["vnf_nak"] = safe_div(aggregate["dobycha_vody_cum"], aggregate["dobycha_nefti_cum"])
 
     if {"debit_neft", "debit_liq"}.issubset(d.columns):
         debit_year = (
