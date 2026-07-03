@@ -679,6 +679,119 @@ def scatter_metric(d, x, y, title, x_title=None, y_title=None, log_x=False, show
     return apply_theme(fig, height=440, compact=True)
 
 
+DISPLACEMENT_CHARACTERISTICS = {
+    "pirverdyan": {
+        "x_column": "dobycha_liq_cum",
+        "x_transform": "inv_sqrt",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "1 / √Qж нак.",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B / √Qж",
+    },
+    "wor": {
+        "x_column": "dobycha_nefti_cum",
+        "y_column": "vnf_tek",
+        "y_transform": "ln",
+        "x_title": "Qн нак., т",
+        "y_title": "LN(ВНФ тек.)",
+        "formula": "LN(ВНФ) = A + B · Qн",
+    },
+    "kambarov": {
+        "x_column": "dobycha_liq_cum",
+        "x_transform": "inverse",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "1 / Qж нак.",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B / Qж",
+    },
+    "sazonov": {
+        "x_column": "dobycha_liq_cum",
+        "x_transform": "ln",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "LN(Qж нак.)",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B · LN(Qж)",
+    },
+    "maximov": {
+        "x_column": "dobycha_vody_cum",
+        "x_transform": "ln",
+        "y_column": "dobycha_nefti_cum",
+        "x_title": "LN(Qв нак.)",
+        "y_title": "Qн нак., т",
+        "formula": "Qн = A + B · LN(Qв)",
+    },
+}
+
+
+def _transform_displacement_series(series, transform):
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    if transform == "ln":
+        return np.log(values.where(values > 0))
+    if transform == "inverse":
+        return 1 / values.where(values > 0)
+    if transform == "inv_sqrt":
+        return 1 / np.sqrt(values.where(values > 0))
+    return values
+
+
+def displacement_characteristic(d, method_key, title):
+    """График характеристики вытеснения по выбранной площади/фильтру."""
+    config = DISPLACEMENT_CHARACTERISTICS[method_key]
+    x_col = config["x_column"]
+    y_col = config["y_column"]
+    required = [x_col, y_col, AREA_COL_YEAR, "year"]
+    miss = [c for c in required if c not in d.columns]
+    if d.empty or miss:
+        return empty_fig(f"Нет данных: {', '.join(miss)}", height=440)
+
+    dd = d[required + [c for c in ["ngdu", "mest"] if c in d.columns]].copy()
+    dd["x_value"] = _transform_displacement_series(dd[x_col], config.get("x_transform"))
+    dd["y_value"] = _transform_displacement_series(dd[y_col], config.get("y_transform"))
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=["x_value", "y_value"]).sort_values([AREA_COL_YEAR, "year"])
+    if dd.empty:
+        return empty_fig("Нет точек после фильтрации", height=440)
+
+    hover_data = {
+        "year": True,
+        "x_value": ":.4f",
+        "y_value": ":.2f",
+        AREA_COL_YEAR: True,
+    }
+    if "ngdu" in dd.columns:
+        hover_data["ngdu"] = True
+    if "mest" in dd.columns:
+        hover_data["mest"] = True
+
+    fig = px.scatter(
+        dd,
+        x="x_value",
+        y="y_value",
+        color=AREA_COL_YEAR,
+        hover_data=hover_data,
+        trendline="ols",
+        labels={
+            "x_value": config["x_title"],
+            "y_value": config["y_title"],
+            AREA_COL_YEAR: "Площадь",
+            "year": "Год",
+            "ngdu": "НГДУ",
+            "mest": "Месторождение",
+        },
+    )
+    fig.update_traces(marker=dict(size=7, opacity=0.84), selector=dict(mode="markers"))
+    for tr in fig.data:
+        if getattr(tr, "mode", None) == "lines":
+            tr.showlegend = False
+            tr.line.width = 1.6
+            tr.line.dash = "dash"
+    fig.update_layout(
+        title=dict(text=f"{title}<br><sup>{config['formula']}</sup>"),
+        xaxis_title=config["x_title"],
+        yaxis_title=config["y_title"],
+    )
+    return apply_theme(fig, height=440, compact=True)
+
+
 
 
 
@@ -1103,6 +1216,11 @@ ANALYSIS_SPECS = [
     ("g20", "ratio_dob_nagn", "q_priem_q_liq", "20. Соотношение доб/наг от Qприем/Qжидк", "Qприем/Qжидк", "Доб/Нагн"),
     ("g21", "kompens_tek", "kin", "21. Компенсация текущая от КИН", "КИН, %", "Компенсация текущая, %"),
     ("g22", "kin", "vnf_tek", "22. КИН от LN(ВНФ тек.)", "LN(ВНФ тек.)", "КИН, %"),
+    ("g_disp_pirverdyan", None, None, "23. Характеристика вытеснения по Пирвердяну", "1 / √Qж нак.", "Qн нак., т"),
+    ("g_disp_wor", None, None, "24. Характеристика по водонефтяному фактору", "Qн нак., т", "LN(ВНФ тек.)"),
+    ("g_disp_kambarov", None, None, "25. Характеристика вытеснения по Камбарову", "1 / Qж нак.", "Qн нак., т"),
+    ("g_disp_sazonov", None, None, "26. Характеристика вытеснения по Сазонову", "LN(Qж нак.)", "Qн нак., т"),
+    ("g_disp_maximov", None, None, "27. Характеристика вытеснения по Максимову", "LN(Qв нак.)", "Qн нак., т"),
 ]
 
 PRIMARY_ASSET_SPEC_IDS = {"g16", "g20"}
@@ -1605,6 +1723,8 @@ def _build_analysis_figure(spec_id, y, x, title, x_title, y_title, d, period_res
         return segmented_wc_kiz(d, period_result=period_result)
     if spec_id == "g20":
         return ratio_vs_q_by_wc_kiz_periods(d, period_result=period_result)
+    if spec_id.startswith("g_disp_"):
+        return displacement_characteristic(d, spec_id.removeprefix("g_disp_"), title)
     return scatter_metric(
         d,
         x=x,
