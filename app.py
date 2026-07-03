@@ -1388,8 +1388,7 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         ))
 
     if len(trend_df) >= 2:
-        def predict(xs):
-            return _linear_predict(trend_df["x_method"], trend_df["y_method"], xs)
+        trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
 
         trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
         last_trend_point = trend_df.sort_values("year").iloc[-1]
@@ -1432,6 +1431,8 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
 
         x_line = np.linspace(x_start, target_x, 80)
         y_line = predict(x_line)
+        x_line[-1] = target_x
+        y_line[-1] = target_y
         fig.add_trace(go.Scatter(
             x=x_line, y=y_line, mode="lines", name=f"Тренд {start_year}-{end_year} до ВНФ=49",
             line=dict(color=OP_RED, width=2.4, dash="dash"),
