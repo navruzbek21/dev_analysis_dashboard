@@ -1084,6 +1084,180 @@ def pumping_washing_vs_kin(d):
     return apply_theme(fig, height=560)
 
 
+
+
+def _linear_predict(x_values, y_values, x_line):
+    x_arr = np.asarray(x_values, dtype=float).reshape(-1, 1)
+    y_arr = np.asarray(y_values, dtype=float)
+    x_line_arr = np.asarray(x_line, dtype=float).reshape(-1, 1)
+    if LinearRegression is not None:
+        model = LinearRegression()
+        model.fit(x_arr, y_arr)
+        return model.predict(x_line_arr)
+    coef = np.polyfit(x_arr.ravel(), y_arr, deg=1)
+    return np.polyval(coef, x_line_arr.ravel())
+
+
+def _displacement_x(vnf: pd.Series, method: str) -> pd.Series:
+    v = pd.to_numeric(vnf, errors="coerce")
+    if method == "ln_vnf":
+        return np.log(v.where(v > 0))
+    if method == "kambarov":
+        return 1 / (1 + v.where(v >= 0))
+    if method == "sazonov":
+        return np.log1p(v.where(v >= 0))
+    if method == "maksimov":
+        return 1 / v.where(v > 0)
+    return v
+
+
+def _displacement_x_title(method: str, vnf_col: str) -> str:
+    if method == "ln_vnf":
+        return f"LN({vnf_col})"
+    if method == "kambarov":
+        return f"1 / (1 + {vnf_col})"
+    if method == "sazonov":
+        return f"LN(1 + {vnf_col})"
+    if method == "maksimov":
+        return f"1 / {vnf_col}"
+    return vnf_col
+
+
+def normalize_period_value(period_value):
+    if not isinstance(period_value, (list, tuple)) or len(period_value) != 2:
+        return tuple(DEFAULT_DISPLACEMENT_PERIOD)
+    start, end = pd.to_numeric(pd.Series(period_value), errors="coerce").fillna(pd.Series(DEFAULT_DISPLACEMENT_PERIOD)).astype(int)
+    return (min(int(start), int(end)), max(int(start), int(end)))
+
+
+def displacement_characteristic_figure(yearly_agg, method: str, method_name: str, period_value=None):
+    if yearly_agg is None or yearly_agg.empty:
+        return empty_fig("Нет данных для характеристики вытеснения", height=460)
+    vnf_col = "vnf_nak" if "vnf_nak" in yearly_agg.columns else "vnf_tek"
+    required = ["year", "kin", vnf_col]
+    missing = [col for col in required if col not in yearly_agg.columns]
+    if missing:
+        return empty_fig(f"Нет данных: {', '.join(missing)}", height=460)
+
+    start_year, end_year = normalize_period_value(period_value)
+    dd = yearly_agg[required].copy()
+    dd["year"] = pd.to_numeric(dd["year"], errors="coerce")
+    dd["kin"] = pd.to_numeric(dd["kin"], errors="coerce")
+    dd[vnf_col] = pd.to_numeric(dd[vnf_col], errors="coerce")
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=required)
+    dd = dd[dd[vnf_col] > 0].sort_values("year")
+    if dd.empty:
+        return empty_fig("Нет точек после фильтрации", height=460)
+
+    dd["x_method"] = _displacement_x(dd[vnf_col], method)
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=["x_method", "kin"])
+    if dd.empty:
+        return empty_fig("Нет точек после преобразования ВНФ", height=460)
+
+    period_mask = dd["year"].between(start_year, end_year, inclusive="both")
+    trend_df = dd[period_mask].dropna(subset=["x_method", "kin"])
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=dd["x_method"],
+            y=dd["kin"],
+            mode="markers+lines",
+            name="Факт",
+            marker=dict(size=8, color=OP_GREEN),
+            line=dict(color=_rgba_from_hex(OP_GREEN, 0.35), width=1.5),
+            customdata=np.column_stack([dd["year"], dd[vnf_col]]),
+            hovertemplate="Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>КИН %{y:.2f}<extra></extra>",
+        )
+    )
+    if not trend_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=trend_df["x_method"],
+                y=trend_df["kin"],
+                mode="markers",
+                name=f"Период {start_year}-{end_year}",
+                marker=dict(size=11, color=OP_RED, symbol="circle-open", line=dict(width=2)),
+                customdata=np.column_stack([trend_df["year"], trend_df[vnf_col]]),
+                hovertemplate="Период тренда<br>Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>КИН %{y:.2f}<extra></extra>",
+            )
+        )
+
+    if len(trend_df) >= 2:
+        target_x = float(_displacement_x(pd.Series([DISPLACEMENT_TARGET_VNF]), method).iloc[0])
+        x_min = float(trend_df["x_method"].min())
+        x_max = float(trend_df["x_method"].max())
+        x_line = np.linspace(min(x_min, target_x), max(x_max, target_x), 80)
+        y_line = _linear_predict(trend_df["x_method"], trend_df["kin"], x_line)
+        target_y = float(_linear_predict(trend_df["x_method"], trend_df["kin"], [target_x])[0])
+        fig.add_trace(
+            go.Scatter(
+                x=x_line,
+                y=y_line,
+                mode="lines",
+                name=f"Тренд {start_year}-{end_year} до ВНФ=49",
+                line=dict(color=OP_RED, width=2.4, dash="dash"),
+                hovertemplate="Тренд<br>КИН %{y:.2f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[target_x],
+                y=[target_y],
+                mode="markers+text",
+                name="Прогноз при ВНФ=49",
+                marker=dict(size=12, color=OP_AMBER, symbol="diamond"),
+                text=[f"ВНФ=49; КИН={target_y:.2f}"],
+                textposition="top center",
+                hovertemplate="ВНФ=49<br>КИН %{y:.2f}<extra></extra>",
+            )
+        )
+    else:
+        fig.add_annotation(
+            text="Для тренда нужны минимум 2 точки в выбранном периоде",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.96,
+            showarrow=False,
+            font=dict(color=OP_MUTED, size=11),
+        )
+
+    fig.update_layout(
+        xaxis_title=_displacement_x_title(method, vnf_col),
+        yaxis_title="КИН, %",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=56, r=28, t=64, b=54),
+    )
+    return apply_theme(fig, height=460, compact=True)
+
+
+def displacement_card(title, graph_id, slider_id):
+    return html.Div(
+        [
+            html.Div(title, className="section-caption"),
+            html.Div("Период для построения линии тренда", className="small text-muted mb-2"),
+            dcc.RangeSlider(
+                id=slider_id,
+                min=2000,
+                max=2035,
+                step=1,
+                value=DEFAULT_DISPLACEMENT_PERIOD,
+                marks={year: str(year) for year in range(2000, 2036, 5)},
+                allowCross=False,
+                tooltip={"placement": "bottom", "always_visible": False},
+            ),
+            dcc.Graph(
+                id=graph_id,
+                className="dash-chart compact-chart",
+                style={"height": "460px", "width": "100%"},
+                responsive=True,
+                config={"responsive": True, "displayModeBar": False},
+            ),
+        ],
+        className="panel-card",
+    )
+
 ANALYSIS_SPECS = [
     ("g04", "debit_liq", "kiz", "4. Дебит жидкости от КИЗ", "КИЗ, %", "Дебит жидкости, т/сут"),
     ("g05", "debit_liq", "stepen_promyvki", "5. Дебит жидкости от степени промывки", "Степень промывки, %", "Дебит жидкости, т/сут"),
@@ -1107,6 +1281,16 @@ ANALYSIS_SPECS = [
 
 PRIMARY_ASSET_SPEC_IDS = {"g16", "g20"}
 ADDITIONAL_ANALYSIS_SPECS = [spec for spec in ANALYSIS_SPECS if spec[0] not in PRIMARY_ASSET_SPEC_IDS]
+
+DISPLACEMENT_TARGET_VNF = 49.0
+DEFAULT_DISPLACEMENT_PERIOD = [2020, 2025]
+DISPLACEMENT_SPECS = [
+    ("disp-pirverdyan", "Характеристика вытеснения: метод Пирвердяна", "Пирвердян", "ln_vnf"),
+    ("disp-vnf", "Характеристика вытеснения: водонефтяной фактор", "ВНФ", "vnf"),
+    ("disp-kambarov", "Характеристика вытеснения: метод Камбарова", "Камбаров", "kambarov"),
+    ("disp-sazonov", "Характеристика вытеснения: метод Сазонова", "Сазонов", "sazonov"),
+    ("disp-maksimov", "Характеристика вытеснения: метод Максимова", "Максимов", "maksimov"),
+]
 
 
 def filters_layout():
@@ -1272,6 +1456,13 @@ def asset_tab_layout():
                         [
                             dbc.Col(graph_card(spec[3], spec[0], "440px", compact=True), lg=6, md=12, className="mb-4")
                             for spec in ADDITIONAL_ANALYSIS_SPECS
+                        ]
+                    ),
+                    html.Div("Характеристики вытеснения по выбранной площади", className="section-caption mt-3 mb-3"),
+                    dbc.Row(
+                        [
+                            dbc.Col(displacement_card(title, graph_id, f"{graph_id}-period"), lg=6, md=12, className="mb-4")
+                            for graph_id, title, _method_name, _method in DISPLACEMENT_SPECS
                         ]
                     ),
                 ],
@@ -1697,15 +1888,18 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
 @app.callback(
     Output("additional-metrics-container", "style"),
     *[Output(spec[0], "figure") for spec in ADDITIONAL_ANALYSIS_SPECS],
+    *[Output(spec[0], "figure") for spec in DISPLACEMENT_SPECS],
     Input("build-extra-metrics", "n_clicks"),
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
     Input("theme-store", "data"),
+    *[Input(f"{spec[0]}-period", "value") for spec in DISPLACEMENT_SPECS],
 )
-def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, theme):
+def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, theme, *displacement_periods):
     if not n_clicks:
-        hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * len(ADDITIONAL_ANALYSIS_SPECS)
+        hidden_count = len(ADDITIONAL_ANALYSIS_SPECS) + len(DISPLACEMENT_SPECS)
+        hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * hidden_count
         return [{"display": "none"}] + hidden_figs
 
     started = time.perf_counter()
@@ -1740,6 +1934,19 @@ def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, sele
                 ),
             )
         )
+    for (graph_id, _title, method_name, method), period_value in zip(DISPLACEMENT_SPECS, displacement_periods):
+        figs.append(
+            safe_build(
+                graph_id,
+                lambda method=method, method_name=method_name, period_value=period_value: displacement_characteristic_figure(
+                    yearly_agg,
+                    method,
+                    method_name,
+                    period_value,
+                ),
+            )
+        )
+
     logger.info(
         "callback=update_additional_asset_metrics mest_count=%s ngdu_count=%s area_count=%s figures=%s total_ms=%.1f",
         len(mest_key),
