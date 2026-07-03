@@ -1160,6 +1160,7 @@ def _kin_from_oil(target_oil: float, recoverable_oil: float) -> float:
     return float(target_oil / recoverable_oil * 100)
 
 
+
 def _linear_coefficients(x, y) -> tuple[float, float]:
     x = pd.to_numeric(pd.Series(x), errors="coerce")
     y = pd.to_numeric(pd.Series(y), errors="coerce")
@@ -1279,6 +1280,42 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
     f_high = f_low
     for _ in range(80):
         high = high + direction * step
+
+def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
+    if not np.isfinite(oil_min) or oil_min <= 0:
+        oil_min = 1.0
+    if not np.isfinite(oil_max) or oil_max <= oil_min:
+        oil_max = oil_min * 2
+
+    def x_from_oil(oil_value):
+        if mode in {"oil_from_liquid_log"}:
+            return np.log(oil_value * (1 + target_vnf))
+        if mode in {"oil_from_liquid_inv"}:
+            return 1 / (oil_value * (1 + target_vnf))
+        if mode == "oil_from_water_log":
+            return np.log(oil_value * target_vnf)
+        if mode == "oil_from_liquid_inv_sqrt":
+            return 1 / np.sqrt(oil_value * (1 + target_vnf))
+        if mode in {"vnf_from_liquid", "liquid_oil_ratio_from_liquid"}:
+            return oil_value * (1 + target_vnf)
+        if mode == "liquid_oil_ratio_from_water":
+            return oil_value * target_vnf
+        return oil_value
+
+    def residual(oil_value):
+        predicted = float(model_fn([x_from_oil(oil_value)])[0])
+        if mode in {"vnf_from_oil", "vnf_from_liquid"}:
+            return predicted - target_vnf
+        if mode in {"liquid_oil_ratio_from_water", "liquid_oil_ratio_from_liquid"}:
+            return predicted - (1 + target_vnf)
+        return predicted - oil_value
+
+    low = max(oil_max, 1e-9)
+    high = low * 1.5
+    last_high = high
+    for _ in range(40):
+        f_low = residual(low)
+
         f_high = residual(high)
         if np.isfinite(f_low) and np.isfinite(f_high) and f_low * f_high <= 0:
             left, right = low, high
@@ -1353,9 +1390,7 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
     if len(trend_df) >= 2:
         trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
 
-        def predict(xs):
-            return trend_a * np.asarray(xs, dtype=float) + trend_b
-
+        trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
         last_trend_point = trend_df.sort_values("year").iloc[-1]
         x_start = float(last_trend_point["x_method"])
         target_x = _solve_target_x_for_annual_vnf(trend_df, DISPLACEMENT_TARGET_VNF, target_mode)
@@ -1365,6 +1400,35 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         target_y = float(predict([target_x])[0])
         target_oil, _target_water = _oil_water_from_displacement_x(target_x, trend_a, trend_b, target_mode)
         target_kin = _kin_from_oil(target_oil, recoverable_oil)
+
+        if target_mode == "vnf_from_oil":
+            target_x = target_oil
+            target_y = DISPLACEMENT_TARGET_VNF
+        elif target_mode == "oil_from_water_log":
+            target_x = np.log(target_oil * DISPLACEMENT_TARGET_VNF)
+            target_y = target_oil
+        elif target_mode == "oil_from_liquid_inv":
+            target_x = 1 / (target_oil * (1 + DISPLACEMENT_TARGET_VNF))
+            target_y = target_oil
+        elif target_mode == "oil_from_liquid_inv_sqrt":
+            target_x = 1 / np.sqrt(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
+            target_y = target_oil
+        elif target_mode == "vnf_from_liquid":
+            target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
+            target_y = DISPLACEMENT_TARGET_VNF
+        elif target_mode == "liquid_oil_ratio_from_water":
+            target_x = target_oil * DISPLACEMENT_TARGET_VNF
+            target_y = 1 + DISPLACEMENT_TARGET_VNF
+        elif target_mode == "liquid_oil_ratio_from_liquid":
+            target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
+            target_y = 1 + DISPLACEMENT_TARGET_VNF
+        else:
+            target_x = np.log(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
+            target_y = target_oil
+
+        last_trend_point = trend_df.sort_values("year").iloc[-1]
+        x_start = float(last_trend_point["x_method"])
+
         x_line = np.linspace(x_start, target_x, 80)
         y_line = predict(x_line)
         x_line[-1] = target_x
