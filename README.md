@@ -13,14 +13,19 @@ This project keeps the original Dash/Plotly UI contract from `app_tatneft_g17_g2
 
 ## SQL Schema
 
-Create the schema and indexes:
+Create the schema and indexes once, then keep reusing the same database connection string:
 
 ```bash
+export DATABASE_URL=postgresql://dashboard:dashboard@localhost:5432/dashboard
 psql "$DATABASE_URL" -f sql/001_create_tables.sql
 psql "$DATABASE_URL" -f sql/002_create_indexes.sql
 psql "$DATABASE_URL" -f sql/003_create_views.sql
 psql "$DATABASE_URL" -f sql/004_add_mest.sql  # for existing databases
 ```
+
+The schema scripts are idempotent (`IF NOT EXISTS` / replaceable views), so rerunning them is safe, but not required on every application start. In Docker Compose, Postgres stores data in the named `postgres_data` volume; use `docker compose stop` / `docker compose up -d` to keep the existing database, and only use `docker compose down -v` when you intentionally want to delete it and recreate it from scratch.
+
+After the schema and data are loaded, start the app with the same `DATABASE_URL` and `DATA_SOURCE=sql`; SQLAlchemy creates a connection pool to the existing database instead of creating a new database.
 
 The logical tables are:
 
