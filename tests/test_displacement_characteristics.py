@@ -18,7 +18,7 @@ def test_asset_year_aggregate_keeps_displacement_inputs():
             "vnf_nak": [2.0, 4.0, 6.0],
             "vnf_tek": [1.0, 3.0, 5.0],
             "dobycha_nefti_cum": [50.0, 100.0, 150.0],
-            "dobycha_vody_cum": [100.0, 400.0, 900.0],
+            "dobycha_vody_cum": [999.0, 999.0, 999.0],
             "dobycha_liq_cum": [150.0, 500.0, 1050.0],
         }
     )
@@ -28,11 +28,11 @@ def test_asset_year_aggregate_keeps_displacement_inputs():
     assert {"kin", "vnf_nak", "vnf_tek", "dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"}.issubset(aggregate.columns)
     first_year = aggregate.loc[aggregate["year"] == 2020].iloc[0]
     assert first_year["kin"] == 15.0
-    assert first_year["vnf_nak"] == 3.0
     assert first_year["vnf_tek"] == 2.0
     assert first_year["dobycha_nefti_cum"] == 150.0
-    assert first_year["dobycha_vody_cum"] == 500.0
     assert first_year["dobycha_liq_cum"] == 650.0
+    assert first_year["dobycha_vody_cum"] == 500.0
+    assert first_year["vnf_nak"] == first_year["dobycha_vody_cum"] / first_year["dobycha_nefti_cum"]
 
 
 def test_displacement_characteristic_extends_trend_to_vnf_49_and_labels_target():
