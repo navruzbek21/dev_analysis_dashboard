@@ -62,7 +62,7 @@ def tools_schema() -> dict[str, Any]:
             },
             "gtm_efficiency": {
                 "description": "Эффективность ГТМ: количество операций, доля эффективных, средние приросты.",
-                "params": {"filters": {"mest": [], "direction": None, "areas": []}},
+                "params": {"algorithm": ["delta", "plan"], "filters": {"mest": [], "direction": None, "areas": []}},
             },
         },
         "metrics": ALLOWED_METRICS,
@@ -288,6 +288,8 @@ def gtm_structure(params: dict[str, Any]) -> ToolResult:
 
 def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
     filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
+    algorithm = gtm_analysis.normalize_efficiency_algorithm(params.get("algorithm"))
+    eff_col = gtm_analysis.efficiency_column(algorithm)
     dataset = gtm_analysis.get_gtm_dataset()
     direction = filters.get("direction") or gtm_analysis.ALL
     areas = _selected_values(filters.get("areas") or filters.get("plosh"))
@@ -300,8 +302,8 @@ def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
         yearly = (
             gtm.groupby("gtm_year", dropna=False)
             .agg(
-                gtm_count=("effective", "size"),
-                effective_count=("effective", "sum"),
+                gtm_count=(eff_col, "size"),
+                effective_count=(eff_col, "sum"),
                 avg_delta_oil=("Δqoil", "mean"),
                 avg_delta_liq=("Δqliq", "mean"),
             )
@@ -313,7 +315,7 @@ def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
         rows = _clean_rows(yearly.to_dict("records"))
         summary = {
             "gtm_count": int(gtm.shape[0]),
-            "efficiency_pct": float(100 * gtm["effective"].mean()),
+            "efficiency_pct": float(100 * gtm[eff_col].mean()),
             "avg_delta_oil": float(gtm["Δqoil"].mean(skipna=True)),
             "avg_delta_liq": float(gtm["Δqliq"].mean(skipna=True)),
         }

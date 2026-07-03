@@ -132,6 +132,21 @@ FACTOR_NAMES = {
 
 FACTOR_COLS = list(FACTOR_NAMES)
 
+EFFICIENCY_ALGORITHM_DELTA = "delta"
+EFFICIENCY_ALGORITHM_PLAN = "plan"
+EFFICIENCY_ALGORITHM_OPTIONS = [
+    {"label": "По приросту ΔQнефти > 0", "value": EFFICIENCY_ALGORITHM_DELTA},
+    {"label": "По плану: средний Qнефти за 1–3 мес. > 90% qoil_plan", "value": EFFICIENCY_ALGORITHM_PLAN},
+]
+EFFICIENCY_COLUMNS = {
+    EFFICIENCY_ALGORITHM_DELTA: "effective",
+    EFFICIENCY_ALGORITHM_PLAN: "effective_plan",
+}
+EFFICIENCY_SUBTITLES = {
+    EFFICIENCY_ALGORITHM_DELTA: "Доля ΔQнефти > 0",
+    EFFICIENCY_ALGORITHM_PLAN: "Доля Qфакт 1–3 мес. > 90% плана",
+}
+
 # -----------------------------------------------------------------------------
 # Утилиты
 # -----------------------------------------------------------------------------
@@ -147,6 +162,18 @@ class GtmDataset:
 
 def cid(value: str) -> str:
     return f"{ID_PREFIX}-{value}"
+
+
+def normalize_efficiency_algorithm(algorithm: str | None) -> str:
+    return algorithm if algorithm in EFFICIENCY_COLUMNS else EFFICIENCY_ALGORITHM_DELTA
+
+
+def efficiency_column(algorithm: str | None) -> str:
+    return EFFICIENCY_COLUMNS[normalize_efficiency_algorithm(algorithm)]
+
+
+def efficiency_subtitle(algorithm: str | None) -> str:
+    return EFFICIENCY_SUBTITLES[normalize_efficiency_algorithm(algorithm)]
 
 
 def normalize_theme(theme: str | None) -> str:
@@ -435,7 +462,7 @@ def normalize_result_df(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce")
 
-    for col in ["qliq", "qoil", "qinj", "wcut", "Р_пл", "Р_заб", "month_offset", "gtm_year", "year"]:
+    for col in ["qliq", "qoil", "qoil_plan", "qinj", "wcut", "Р_пл", "Р_заб", "month_offset", "gtm_year", "year"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
 
@@ -458,6 +485,9 @@ def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
         qliq_before = base["qliq"].mean()
         qoil_before = base["qoil"].mean()
 
+    qoil_after_1_3 = after_1_3["qoil"].mean() if not after_1_3.empty else np.nan
+    qoil_plan = group["qoil_plan"].dropna().iloc[0] if "qoil_plan" in group.columns and group["qoil_plan"].notna().any() else np.nan
+
     if not after_1_3.empty:
         after = after_1_3
     else:
@@ -466,6 +496,8 @@ def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
             return pd.Series({
                 "Δqliq": np.nan,
                 "Δqoil": np.nan,
+                "qoil_after_1_3": qoil_after_1_3,
+                "qoil_plan": qoil_plan,
                 "gtm_year": safe_first(group["gtm_year"]),
                 "назначение": safe_first(group.get("назнач_скв_факт", pd.Series(dtype=object)), "Не указано"),
                 "направление": safe_first(group.get("направление", pd.Series(dtype=object))),
@@ -477,6 +509,8 @@ def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
     return pd.Series({
         "Δqliq": after["qliq"].mean() - qliq_before,
         "Δqoil": after["qoil"].mean() - qoil_before,
+        "qoil_after_1_3": qoil_after_1_3,
+        "qoil_plan": qoil_plan,
         "gtm_year": safe_first(group["gtm_year"]),
         "назначение": safe_first(group.get("назнач_скв_факт", pd.Series(dtype=object)), "Не указано"),
         "направление": safe_first(group.get("направление", pd.Series(dtype=object))),
@@ -498,6 +532,10 @@ def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
+    if {"qoil_after_1_3", "qoil_plan"}.issubset(gtm_level.columns):
+        gtm_level["effective_plan"] = np.where(gtm_level["qoil_after_1_3"] > 0.9 * gtm_level["qoil_plan"], 1, 0)
+    else:
+        gtm_level["effective_plan"] = 0
     return gtm_level
 
 
@@ -518,20 +556,21 @@ def filter_df(df: pd.DataFrame, direction=ALL, plosh=ALL, mest=ALL) -> pd.DataFr
 # -----------------------------------------------------------------------------
 # Фигуры
 # -----------------------------------------------------------------------------
-def make_kpi_cards(gtm_level: pd.DataFrame) -> list[dbc.Col]:
+def make_kpi_cards(gtm_level: pd.DataFrame, algorithm: str | None = EFFICIENCY_ALGORITHM_DELTA) -> list[dbc.Col]:
+    eff_col = efficiency_column(algorithm)
     if gtm_level.empty:
         values = {"gtm": 0, "eff": 0, "dq_oil": 0, "dq_liq": 0}
     else:
         values = {
             "gtm": len(gtm_level),
-            "eff": 100 * (gtm_level["Δqoil"].gt(0).mean()),
+            "eff": 100 * (gtm_level[eff_col].mean()) if eff_col in gtm_level.columns else 0,
             "dq_oil": gtm_level["Δqoil"].mean(skipna=True),
             "dq_liq": gtm_level["Δqliq"].mean(skipna=True),
         }
 
     cards = [
         ("ГТМ", f"{values['gtm']:,.0f}".replace(",", " "), "Всего в выборке", "#008E5B", "●"),
-        ("Эффективность", f"{values['eff']:.1f}%", "Доля ΔQнефти > 0", "#0A9B69", "●"),
+        ("Эффективность", f"{values['eff']:.1f}%", efficiency_subtitle(algorithm), "#0A9B69", "●"),
         ("Средний ΔQнефти", f"{values['dq_oil']:+.2f}", "т/сут", "#D53033" if values["dq_oil"] < 0 else "#008E5B", "●"),
         ("Средний ΔQжидкости", f"{values['dq_liq']:+.2f}", "т/сут", "#008E5B", "●"),
     ]
@@ -645,8 +684,9 @@ def fig_delta_and_counts(gtm_level: pd.DataFrame) -> go.Figure:
     return apply_common_layout(fig, height=500)
 
 
-def fig_efficiency(gtm_level: pd.DataFrame) -> go.Figure:
-    if gtm_level.empty or "назначение" not in gtm_level.columns or "effective" not in gtm_level.columns:
+def fig_efficiency(gtm_level: pd.DataFrame, algorithm: str | None = EFFICIENCY_ALGORITHM_DELTA) -> go.Figure:
+    eff_col = efficiency_column(algorithm)
+    if gtm_level.empty or "назначение" not in gtm_level.columns or eff_col not in gtm_level.columns:
         return empty_figure("Нет данных по добывающим скважинам")
 
     df = gtm_level[gtm_level["назначение"].eq("Добывающая")].copy()
@@ -654,11 +694,11 @@ def fig_efficiency(gtm_level: pd.DataFrame) -> go.Figure:
         return empty_figure("Нет данных по добывающим скважинам")
 
     yearly = (
-        df.groupby(["gtm_year", "effective"], dropna=False)
+        df.groupby(["gtm_year", eff_col], dropna=False)
         .size()
         .rename("n")
         .reset_index()
-        .pivot_table(index="gtm_year", columns="effective", values="n", fill_value=0)
+        .pivot_table(index="gtm_year", columns=eff_col, values="n", fill_value=0)
         .reset_index()
     )
     for col in [0, 1]:
@@ -1256,6 +1296,20 @@ def layout():
                             ],
                             md=4,
                         ),
+                        dbc.Col(
+                            [
+                                html.Label("Алгоритм расчёта эффективности"),
+                                dcc.RadioItems(
+                                    id=cid("efficiency-algorithm"),
+                                    options=EFFICIENCY_ALGORITHM_OPTIONS,
+                                    value=EFFICIENCY_ALGORITHM_DELTA,
+                                    persistence=True,
+                                    inputClassName="me-1",
+                                    labelClassName="me-3",
+                                ),
+                            ],
+                            md=8,
+                        ),
                     ],
                     className="g-3",
                 ),
@@ -1306,7 +1360,7 @@ def layout():
                 ),
                 dbc.Col(
                     dbc.Card(
-                        [style_card_header("Эффективность ГТМ", "Доля операций с ΔQнефти > 0", "02"), dbc.CardBody(dcc.Graph(id=cid("graph-2"), config={"displayModeBar": False}))],
+                        [style_card_header("Эффективность ГТМ", "Выбранный алгоритм расчёта эффективности", "02"), dbc.CardBody(dcc.Graph(id=cid("graph-2"), config={"displayModeBar": False}))],
                         className=CARD_CLASS,
                         style=CARD_STYLE,
                     ),
@@ -1494,11 +1548,12 @@ def register_callbacks(app):
         Output(cid("data-table"), "columns"),
         Output(cid("boxplot-factors"), "figure"),
         Input(cid("direction-filter"), "value"),
+        Input(cid("efficiency-algorithm"), "value"),
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
         Input("theme-store", "data"),
     )
-    def update_dashboard(direction=ALL, plosh=ALL, mest=ALL, theme="light"):
+    def update_dashboard(direction=ALL, efficiency_algorithm=EFFICIENCY_ALGORITHM_DELTA, plosh=ALL, mest=ALL, theme="light"):
         dataset = get_gtm_dataset()
         filtered_result = filter_df(dataset.result_df, direction, plosh, mest)
         filtered_gtm = filter_df(dataset.gtm_level, direction, plosh, mest)
@@ -1513,11 +1568,11 @@ def register_callbacks(app):
             injection_counts = fig_gtm_direction_counts(filtered_gtm, "injection")
 
         return (
-            make_kpi_cards(filtered_gtm),
+            make_kpi_cards(filtered_gtm, efficiency_algorithm),
             apply_runtime_theme(production_counts, theme),
             apply_runtime_theme(injection_counts, theme),
             apply_runtime_theme(fig_delta_and_counts(filtered_gtm), theme),
-            apply_runtime_theme(fig_efficiency(filtered_gtm), theme),
+            apply_runtime_theme(fig_efficiency(filtered_gtm, efficiency_algorithm), theme),
             apply_runtime_theme(fig_dynamics_by_year(filtered_result), theme),
             apply_runtime_theme(fig_cumulative_dynamics(filtered_result), theme),
             table_data,
