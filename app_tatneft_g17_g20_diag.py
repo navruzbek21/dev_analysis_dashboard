@@ -1,8 +1,3 @@
-from __future__ import annotations
-
-import logging
-import time
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -13,23 +8,33 @@ try:
     from sklearn.linear_model import LinearRegression
 except ImportError:
     LinearRegression = None
-from dash import Dash, dcc, html, Input, Output, State, ctx
+try:
+    import ruptures as rpt
+except ImportError:
+    rpt = None
+from dash import Dash, dcc, html, Input, Output, ctx
 import dash_bootstrap_components as dbc
 
-from cache_backend import check_redis_connection
-from config import settings
-from db import check_database_connection
-from filter_utils import normalize_filter_values
-from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, safe_div
-from services import aggregation_service, data_service, figure_service, periods_service
-import gtm_analysis
-import qwen_console
+# =============================================================================
+# 1. ДАННЫЕ
+# -----------------------------------------------------------------------------
+# Вариант А: импортируйте/создайте df2 и df_ploshad_year выше этого блока.
+# Вариант Б: раскомментируйте чтение из файлов.
+df2 = pd.read_parquet("df2.parquet")
+df_ploshad_year = pd.read_parquet("df_ploshad_year.parquet")
+# =============================================================================
 
+try:
+    df2
+    df_ploshad_year
+except NameError as exc:
+    raise RuntimeError(
+        "Перед запуском app.py загрузите df2 и df_ploshad_year или раскомментируйте чтение из файлов."
+    ) from exc
 
-logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
-logger = logging.getLogger(__name__)
-
-WELL_COL = "well_uid"
+AREA_COL_YEAR = "kod_ploshchadi"
+AREA_COL_MONTH = "ploshad"
+WELL_COL = "well_uid" if "well_uid" in df2.columns else "well"
 
 # =============================================================================
 # 2. ВИЗУАЛЬНАЯ СИСТЕМА «ТАТНЕФТЬ»
@@ -53,27 +58,6 @@ OP_AMBER = "#F2B84B"
 OP_RED = "#D53033"
 PALETTE = [OP_GREEN, "#00B473", OP_RED, "#7CB342", "#44546A", OP_AMBER, "#7E8C86", "#B8D9CC", OP_GREEN_DEEP]
 HEAT_SCALE = [[0.0, "#EEF5F1"], [0.45, OP_GREEN_LIGHT], [0.75, OP_GREEN], [1.0, OP_RED]]
-
-THEME_TOKENS = {
-    "light": {
-        "card": OP_CARD,
-        "ink": OP_INK,
-        "muted": OP_MUTED,
-        "border": OP_BORDER,
-        "grid": OP_GRID,
-        "legend_bg": "rgba(255,255,255,0)",
-        "hover_bg": "#FFFFFF",
-    },
-    "dark": {
-        "card": "#17211D",
-        "ink": "#E8F0EC",
-        "muted": "#A8B9B0",
-        "border": "#314138",
-        "grid": "rgba(168, 185, 176, 0.16)",
-        "legend_bg": "rgba(23,33,29,0)",
-        "hover_bg": "#1F2B26",
-    },
-}
 
 # Дополнительные цвета для графика технологической динамики
 TN_LIQ_GREEN = "#008E5B"      # добыча жидкости
@@ -104,52 +88,6 @@ pio.templates["tatneft_light"] = go.layout.Template(
 )
 pio.templates.default = "tatneft_light"
 
-
-def normalize_theme(theme: str | None) -> str:
-    return "dark" if theme == "dark" else "light"
-
-
-def apply_runtime_theme(fig, theme: str | None = "light"):
-    theme_name = normalize_theme(theme)
-    tokens = THEME_TOKENS[theme_name]
-    themed = go.Figure(fig)
-    themed.update_layout(
-        paper_bgcolor=tokens["card"],
-        plot_bgcolor=tokens["card"],
-        font=dict(family=FONT_BODY, color=tokens["ink"], size=12),
-        legend=dict(
-            font=dict(color=tokens["muted"]),
-            bgcolor=tokens["legend_bg"],
-            bordercolor=tokens["border"],
-        ),
-        hoverlabel=dict(
-            bgcolor=tokens["hover_bg"],
-            bordercolor=OP_GREEN,
-            font=dict(color=tokens["ink"], family=FONT_BODY, size=11),
-        ),
-    )
-    axis_names = [
-        axis_name
-        for axis_name in themed.to_plotly_json().get("layout", {})
-        if axis_name.startswith(("xaxis", "yaxis"))
-    ]
-    for axis_name in axis_names:
-        if axis_name.startswith(("xaxis", "yaxis")):
-            themed.update_layout(
-                **{
-                    axis_name: dict(
-                        gridcolor=tokens["grid"],
-                        linecolor=tokens["border"],
-                        tickcolor=tokens["border"],
-                        tickfont=dict(color=tokens["muted"]),
-                        title=dict(font=dict(color=tokens["muted"])),
-                    )
-                }
-            )
-    for annotation in themed.layout.annotations or ():
-        annotation.update(font=dict(color=tokens["muted"]))
-    return themed
-
 YEAR_METRICS = {
     "dobycha_nefti": "Добыча нефти, т",
     "dobycha_liq": "Добыча жидкости, т",
@@ -164,53 +102,17 @@ CHANGE_PERIODS = {
     "5y": "динамика YoY за 5 лет",
 }
 
+# Оставляем только показатели, которые реально есть в годовой таблице.
+YEAR_METRICS = {k: v for k, v in YEAR_METRICS.items() if k in df_ploshad_year.columns}
+if not YEAR_METRICS:
+    raise RuntimeError("В df_ploshad_year не найден ни один показатель для вкладки 'Основные показатели'.")
 DEFAULT_MAIN_METRIC = "dobycha_nefti" if "dobycha_nefti" in YEAR_METRICS else next(iter(YEAR_METRICS))
 
-ALL_MEST_VALUE = "__ALL_MEST__"
-ALL_NGDU_VALUE = "__ALL_NGDU__"
-ALL_AREAS_VALUE = "__ALL_AREAS__"
 
-KPI_OIL_RED = OP_RED
-KPI_LIQ_GREEN = OP_GREEN
-KPI_INJ_BLUE = TN_INJ_BLUE
-KPI_WC_CYAN = TN_WC_CYAN
-
-
-def _as_list(value):
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
-        return [item for item in value if item is not None]
-    return [value]
-
-
-def _filter_key(value, all_value):
-    values = _as_list(value)
-    concrete_values = [item for item in values if item != all_value]
-    if not concrete_values:
-        return tuple()
-    return normalize_filter_values(concrete_values)
-
-
-def _options_with_all(values, all_label, all_value):
-    return [{"label": all_label, "value": all_value}] + [{"label": str(value), "value": value} for value in values]
-
-
-def _selected_or_all(value, allowed_values, all_value):
-    values = _as_list(value)
-    if not values:
-        return [all_value]
-    values = [item for item in values if item != all_value]
-    allowed = set(allowed_values)
-    selected = [item for item in values if item in allowed]
-    return selected or [all_value]
-
-
-def _rgba_from_hex(color, alpha):
-    if not isinstance(color, str) or not color.startswith("#") or len(color) != 7:
-        return color
-    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-    return f"rgba({r},{g},{b},{alpha})"
+def safe_div(a, b):
+    a = pd.to_numeric(a, errors="coerce")
+    b = pd.to_numeric(b, errors="coerce")
+    return np.where((b == 0) | b.isna(), np.nan, a / b)
 
 
 def compact(value):
@@ -227,32 +129,101 @@ def compact(value):
     return f"{value:.1f}" if value % 1 else f"{value:.0f}"
 
 
-def format_visible_pct_label(value) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value):+.1f}%"
+def normalize_data(df2: pd.DataFrame, dfy: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df2 = df2.copy().replace([np.inf, -np.inf], np.nan)
+    dfy = dfy.copy().replace([np.inf, -np.inf], np.nan)
 
+    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
+    if "year" not in df2.columns:
+        df2["year"] = df2["date"].dt.year
+    df2["year"] = pd.to_numeric(df2["year"], errors="coerce").astype("Int64")
+    dfy["year"] = pd.to_numeric(dfy["year"], errors="coerce").astype("Int64")
 
-def _safe_initial_options(loader, label):
-    try:
-        return loader()
-    except Exception:
-        logger.exception("Could not load initial %s options", label)
-        return []
+    for col in ["dob_fond", "nagn_fond", "kin", "niz_otbor", "niz_temp", "kompens_tek", "kompens_nak", "gz", "niz"]:
+        if col not in dfy.columns:
+            dfy[col] = np.nan
 
-
-ALL_MEST = _safe_initial_options(data_service.get_mest_options, "mest")
-ALL_NGDU = _safe_initial_options(lambda: data_service.get_ngdu_options(tuple()), "ngdu")
-ALL_AREAS = _safe_initial_options(lambda: data_service.get_area_options(tuple(), tuple()), "area")
-LAST_YEAR = None
-
-
-def filter_year_data(selected_ngdu, selected_areas, selected_mest=()):
-    return data_service.get_filtered_year_data(
-        _filter_key(selected_ngdu, ALL_NGDU_VALUE),
-        _filter_key(selected_areas, ALL_AREAS_VALUE),
-        _filter_key(selected_mest, ALL_MEST_VALUE),
+    area_ngdu = (
+        df2[[AREA_COL_MONTH, "ngdu"]]
+        .dropna()
+        .drop_duplicates()
+        .rename(columns={AREA_COL_MONTH: AREA_COL_YEAR})
     )
+    area_ngdu = area_ngdu.groupby(AREA_COL_YEAR, as_index=False)["ngdu"].first()
+    dfy = dfy.merge(area_ngdu, on=AREA_COL_YEAR, how="left")
+
+    # Дебиты нефти и жидкости считаем на одной и той же базе строк.
+    # Иначе из-за разных пропусков среднее по нефти и среднее по жидкости могут стать несопоставимыми,
+    # и визуально появляется невозможная ситуация: дебит нефти выше дебита жидкости.
+    agg_kwargs = {}
+    has_debit_pair = {"debit_neft", "debit_liq"}.issubset(df2.columns)
+    for col in ["debit_neft", "debit_liq", "debit_vod", "priem", "wc"]:
+        if col not in df2.columns:
+            continue
+        if has_debit_pair and col in {"debit_neft", "debit_liq"}:
+            continue
+        agg_kwargs[col if col != "wc" else "wc_month_avg"] = (col, "mean")
+
+    yearly_parts = []
+    if agg_kwargs:
+        yearly_parts.append(
+            df2.groupby([AREA_COL_MONTH, "year"], as_index=False)
+            .agg(**agg_kwargs)
+            .rename(columns={AREA_COL_MONTH: AREA_COL_YEAR})
+        )
+
+    if has_debit_pair:
+        debit_pair_year = (
+            df2.dropna(subset=["debit_neft", "debit_liq"])
+            .groupby([AREA_COL_MONTH, "year"], as_index=False)
+            .agg(debit_neft=("debit_neft", "mean"), debit_liq=("debit_liq", "mean"))
+            .rename(columns={AREA_COL_MONTH: AREA_COL_YEAR})
+        )
+        yearly_parts.append(debit_pair_year)
+
+    if yearly_parts:
+        wells_year = yearly_parts[0]
+        for part in yearly_parts[1:]:
+            wells_year = wells_year.merge(part, on=[AREA_COL_YEAR, "year"], how="outer")
+        dfy = dfy.merge(wells_year, on=[AREA_COL_YEAR, "year"], how="left")
+
+    dfy = dfy.sort_values([AREA_COL_YEAR, "year"])
+    if "dobycha_vody_cum" not in dfy.columns and "dobycha_vody" in dfy.columns:
+        dfy["dobycha_vody_cum"] = dfy.groupby(AREA_COL_YEAR)["dobycha_vody"].cumsum()
+    if "dobycha_nefti_cum" not in dfy.columns and "dobycha_nefti" in dfy.columns:
+        dfy["dobycha_nefti_cum"] = dfy.groupby(AREA_COL_YEAR)["dobycha_nefti"].cumsum()
+    if "dobycha_liq_cum" not in dfy.columns and "dobycha_liq" in dfy.columns:
+        dfy["dobycha_liq_cum"] = dfy.groupby(AREA_COL_YEAR)["dobycha_liq"].cumsum()
+    if "zakachka_cum" not in dfy.columns and "zakachka" in dfy.columns:
+        dfy["zakachka_cum"] = dfy.groupby(AREA_COL_YEAR)["zakachka"].cumsum()
+
+    dfy["kiz"] = dfy.get("niz_otbor", np.nan)
+    dfy["vnf_tek"] = safe_div(dfy.get("dobycha_vody", np.nan), dfy.get("dobycha_nefti", np.nan))
+    dfy["vnf_nak"] = safe_div(dfy.get("dobycha_vody_cum", np.nan), dfy.get("dobycha_nefti_cum", np.nan))
+    dfy["ratio_dob_nagn"] = safe_div(dfy.get("dob_fond", np.nan), dfy.get("nagn_fond", np.nan))
+    dfy["q_priem_q_liq"] = safe_div(dfy.get("priem", np.nan), dfy.get("debit_liq", np.nan))
+    dfy["stepen_prokachki"] = 100 * safe_div(dfy.get("zakachka_cum", np.nan), dfy.get("gz", np.nan))
+    dfy["stepen_promyvki"] = 100 * safe_div(dfy.get("dobycha_liq_cum", np.nan), dfy.get("gz", np.nan))
+    dfy["temp_prokachki"] = 100 * safe_div(dfy.get("zakachka", np.nan), dfy.get("gz", np.nan))
+    dfy["temp_promyvki"] = 100 * safe_div(dfy.get("dobycha_liq", np.nan), dfy.get("gz", np.nan))
+
+    return df2, dfy
+
+
+df2, dfy = normalize_data(df2, df_ploshad_year)
+
+ALL_NGDU = sorted([x for x in dfy["ngdu"].dropna().unique()])
+ALL_AREAS = sorted([x for x in dfy[AREA_COL_YEAR].dropna().unique()])
+LAST_YEAR = int(dfy["year"].max())
+
+
+def filter_year_data(selected_ngdu, selected_areas):
+    d = dfy.copy()
+    if selected_ngdu:
+        d = d[d["ngdu"].isin(selected_ngdu)]
+    if selected_areas:
+        d = d[d[AREA_COL_YEAR].isin(selected_areas)]
+    return d
 
 
 def apply_theme(fig, height=None, compact=False):
@@ -311,7 +282,7 @@ def sparkline(x, y, color=OP_GREEN):
     return fig
 
 
-def delta_block(cur, prev, unit_pp=False, positive_is_bad=False):
+def delta_block(cur, prev, unit_pp=False):
     if pd.isna(prev) or pd.isna(cur) or (not unit_pp and prev == 0):
         return html.Div("нет базы сравнения", className="metric-delta delta-flat")
     if unit_pp:
@@ -320,15 +291,12 @@ def delta_block(cur, prev, unit_pp=False, positive_is_bad=False):
     else:
         d = (cur - prev) / abs(prev) * 100
         txt = f"{d:+.1f}% к пред. году"
-    if positive_is_bad:
-        cls = "delta-down" if d > 0 else ("delta-up" if d < 0 else "delta-flat")
-    else:
-        cls = "delta-up" if d > 0 else ("delta-down" if d < 0 else "delta-flat")
+    cls = "delta-up" if d > 0 else ("delta-down" if d < 0 else "delta-flat")
     arrow = "▲ " if d > 0 else ("▼ " if d < 0 else "— ")
     return html.Div(arrow + txt, className=f"metric-delta {cls}")
 
 
-def metric_card(title, value, unit, delta, spark_fig, led="led-green", accent_color=OP_GREEN):
+def metric_card(title, value, unit, delta, spark_fig, led="led-green"):
     return html.Div(
         [
             html.Span(className=f"status-led {led}"),
@@ -338,7 +306,6 @@ def metric_card(title, value, unit, delta, spark_fig, led="led-green", accent_co
             dcc.Graph(figure=spark_fig, config={"displayModeBar": False, "staticPlot": True}, style={"height": "46px", "marginTop": "8px"}),
         ],
         className="metric-card",
-        style={"--metric-color": accent_color, "--metric-light": _rgba_from_hex(accent_color, 0.16)},
     )
 
 
@@ -408,7 +375,7 @@ def change_bar(d, metric, period):
             y="change_pct",
             color=AREA_COL_YEAR,
             barmode="group",
-            text=[format_visible_pct_label(v) for v in dd["change_pct"]],
+            text="change_pct",
             category_orders={"year_label": year_order, AREA_COL_YEAR: area_order},
             hover_data={
                 AREA_COL_YEAR: True,
@@ -419,7 +386,7 @@ def change_bar(d, metric, period):
                 "year": False,
             },
         )
-        fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
+        fig.update_traces(texttemplate="%{y:+.1f}%", textposition="outside", cliponaxis=False)
         fig.update_layout(
             xaxis_title="Год",
             yaxis_title="Изменение к предыдущему году, %",
@@ -447,8 +414,8 @@ def change_bar(d, metric, period):
     if dd.empty:
         return empty_fig("Недостаточно данных для сравнения")
 
-    fig = px.bar(dd, x=AREA_COL_YEAR, y="change_pct", color=AREA_COL_YEAR, text=[format_visible_pct_label(v) for v in dd["change_pct"]])
-    fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
+    fig = px.bar(dd, x=AREA_COL_YEAR, y="change_pct", color=AREA_COL_YEAR, text="change_pct")
+    fig.update_traces(texttemplate="%{y:+.1f}%", textposition="outside", cliponaxis=False)
     fig.update_layout(
         xaxis_title="Площадь",
         yaxis_title="Изменение, %",
@@ -479,15 +446,53 @@ def crossplot_debit_wc(d):
     return apply_theme(fig)
 
 
-def tech_dynamics(d, yearly_agg=None):
-    if d.empty and (yearly_agg is None or yearly_agg.empty):
+def tech_dynamics(d):
+    if d.empty:
         return empty_fig()
-    a = yearly_agg.copy() if yearly_agg is not None else aggregation_service.compute_asset_year_aggregate(d)
+    agg_spec = dict(
+        dobycha_liq=("dobycha_liq", "sum"),
+        dobycha_nefti=("dobycha_nefti", "sum"),
+        zakachka=("zakachka", "sum"),
+        dob_fond=("dob_fond", "sum"),
+        nagn_fond=("nagn_fond", "sum"),
+    )
+    if "wc" in d.columns:
+        agg_spec["wc"] = ("wc", "mean")
+    elif "wc_month_avg" in d.columns:
+        agg_spec["wc"] = ("wc_month_avg", "mean")
+
+    a = d.groupby("year", as_index=False).agg(**agg_spec).sort_values("year")
+
+    # Дебит нефти и дебит жидкости агрегируем по одинаковому набору строк.
+    # Это не искажает физическое соотношение и убирает эффект разных NaN-баз.
+    if {"debit_neft", "debit_liq"}.issubset(d.columns):
+        debit_year = (
+            d.dropna(subset=["debit_neft", "debit_liq"])
+            .groupby("year", as_index=False)
+            .agg(debit_neft=("debit_neft", "mean"), debit_liq=("debit_liq", "mean"))
+        )
+        a = a.merge(debit_year, on="year", how="left")
+    else:
+        if "debit_neft" in d.columns:
+            a = a.merge(d.groupby("year", as_index=False).agg(debit_neft=("debit_neft", "mean")), on="year", how="left")
+        else:
+            a["debit_neft"] = np.nan
+        if "debit_liq" in d.columns:
+            a = a.merge(d.groupby("year", as_index=False).agg(debit_liq=("debit_liq", "mean")), on="year", how="left")
+        else:
+            a["debit_liq"] = np.nan
+
+    # Если после одинаковой базы всё равно нефть выше жидкости, это уже признак ошибки в исходных данных
+    # или перепутанных колонок. Для графика не даём жидкости быть ниже нефти, но исходные колонки сохраняем.
+    a["debit_liq_plot"] = np.where(
+        a[["debit_neft", "debit_liq"]].notna().all(axis=1) & (a["debit_liq"] < a["debit_neft"]),
+        a["debit_neft"],
+        a["debit_liq"],
+    )
     if "wc" not in a.columns:
         a["wc"] = np.nan
 
-    if "oil_yoy_pct" not in a.columns:
-        a["oil_yoy_pct"] = pd.to_numeric(a["dobycha_nefti"], errors="coerce").pct_change() * 100
+    a["oil_yoy_pct"] = pd.to_numeric(a["dobycha_nefti"], errors="coerce").pct_change() * 100
     a["oil_yoy_color"] = np.where(a["oil_yoy_pct"] >= 0, OP_GREEN, OP_RED)
 
     fig = make_subplots(
@@ -570,8 +575,8 @@ def tech_dynamics(d, yearly_agg=None):
             y=yoy["oil_yoy_pct"],
             name="Δ нефти YoY",
             marker_color=yoy["oil_yoy_color"],
-            text=[format_visible_pct_label(v) for v in yoy["oil_yoy_pct"]],
-            texttemplate="%{text}",
+            text=yoy["oil_yoy_pct"],
+            texttemplate="%{y:+.1f}%",
             textposition="outside",
             cliponaxis=False,
             showlegend=False,
@@ -628,10 +633,10 @@ def tech_dynamics(d, yearly_agg=None):
     )
     return apply_theme(fig, height=650)
 
-def fund_dynamics(d, yearly_agg=None):
-    if d.empty and (yearly_agg is None or yearly_agg.empty):
+def fund_dynamics(d):
+    if d.empty:
         return empty_fig()
-    a = yearly_agg.copy() if yearly_agg is not None else aggregation_service.compute_asset_year_aggregate(d)
+    a = d.groupby("year", as_index=False).agg(dob_fond=("dob_fond", "sum"), nagn_fond=("nagn_fond", "sum")).sort_values("year")
     fig = go.Figure()
     fig.add_bar(x=a["year"], y=a["dob_fond"], name="Добывающий фонд", marker_color=OP_GREEN)
     fig.add_bar(x=a["year"], y=a["nagn_fond"], name="Нагнетательный фонд", marker_color=TN_FUND_BLUE)
@@ -639,12 +644,11 @@ def fund_dynamics(d, yearly_agg=None):
     return apply_theme(fig)
 
 
-def fund_ratio_dynamics(d, yearly_agg=None):
-    if d.empty and (yearly_agg is None or yearly_agg.empty):
+def fund_ratio_dynamics(d):
+    if d.empty:
         return empty_fig()
-    a = yearly_agg.copy() if yearly_agg is not None else aggregation_service.compute_asset_year_aggregate(d)
-    if "ratio_dob_nagn" not in a.columns:
-        a["ratio_dob_nagn"] = safe_div(a["dob_fond"], a["nagn_fond"])
+    a = d.groupby("year", as_index=False).agg(dob_fond=("dob_fond", "sum"), nagn_fond=("nagn_fond", "sum"))
+    a["ratio_dob_nagn"] = safe_div(a["dob_fond"], a["nagn_fond"])
     fig = px.bar(a, x="year", y="ratio_dob_nagn", text_auto=".2f")
     fig.update_layout(xaxis_title="Год", yaxis_title="Доб/Нагн")
     return apply_theme(fig)
@@ -870,14 +874,9 @@ def compute_wc_kiz_periods(d, n_periods=6, min_size=5):
     return df_seg, segments, []
 
 
-def segmented_wc_kiz(d, n_periods=6, min_size=5, period_result=None):
+def segmented_wc_kiz(d, n_periods=6, min_size=5):
     """Карточка 16: Обводнённость от КИЗ с оптимальным разбиением на периоды."""
-    if period_result is None:
-        df_seg, segments, miss = compute_wc_kiz_periods(d, n_periods=n_periods, min_size=min_size)
-    else:
-        df_seg = period_result.data.copy()
-        segments = list(period_result.segments)
-        miss = list(period_result.missing_columns)
+    df_seg, segments, miss = compute_wc_kiz_periods(d, n_periods=n_periods, min_size=min_size)
     if miss:
         return empty_fig(f"Нет данных: {', '.join(miss)}", height=440)
     if df_seg.empty:
@@ -992,7 +991,7 @@ def segmented_wc_kiz(d, n_periods=6, min_size=5, period_result=None):
     return apply_theme(fig, height=440, compact=True)
 
 
-def ratio_vs_q_by_wc_kiz_periods(d, period_result=None):
+def ratio_vs_q_by_wc_kiz_periods(d):
     """Карточка 20: Доб/наг от Qприем/Qжидк с окраской по периодам из карточки 16."""
     x = "q_priem_q_liq"
     y = "ratio_dob_nagn"
@@ -1001,11 +1000,7 @@ def ratio_vs_q_by_wc_kiz_periods(d, period_result=None):
     if d.empty or miss:
         return empty_fig(f"Нет данных: {', '.join(miss)}", height=440)
 
-    if period_result is None:
-        df_periods, _segments, period_miss = compute_wc_kiz_periods(d)
-    else:
-        df_periods = period_result.data.copy()
-        period_miss = list(period_result.missing_columns)
+    df_periods, _segments, period_miss = compute_wc_kiz_periods(d)
     if period_miss or df_periods.empty:
         # Если периоды невозможно рассчитать, возвращаем обычный график с трендом.
         return scatter_metric(
@@ -1084,243 +1079,6 @@ def pumping_washing_vs_kin(d):
     return apply_theme(fig, height=560)
 
 
-
-
-def _linear_predict(x_values, y_values, x_line):
-    x_arr = np.asarray(x_values, dtype=float).reshape(-1, 1)
-    y_arr = np.asarray(y_values, dtype=float)
-    x_line_arr = np.asarray(x_line, dtype=float).reshape(-1, 1)
-    if LinearRegression is not None:
-        model = LinearRegression()
-        model.fit(x_arr, y_arr)
-        return model.predict(x_line_arr)
-    coef = np.polyfit(x_arr.ravel(), y_arr, deg=1)
-    return np.polyval(coef, x_line_arr.ravel())
-
-
-
-def _positive_numeric(series: pd.Series) -> pd.Series:
-    values = pd.to_numeric(series, errors="coerce")
-    return values.where(values > 0)
-
-
-def _displacement_prepare_axes(dd: pd.DataFrame, method: str, vnf_col: str) -> tuple[pd.DataFrame, str, str, str]:
-    oil = _positive_numeric(dd["dobycha_nefti_cum"])
-    water = _positive_numeric(dd["dobycha_vody_cum"])
-    liquid = _positive_numeric(dd["dobycha_liq_cum"])
-    vnf = _positive_numeric(dd[vnf_col])
-
-    if method == "ln_vnf":
-        dd["x_method"] = 1 / np.sqrt(liquid)
-        dd["y_method"] = oil
-        return dd, "1 / √(накопленная добыча жидкости)", "Накопленная добыча нефти, т", "oil_from_liquid_inv_sqrt"
-    if method == "kambarov":
-        dd["x_method"] = 1 / liquid
-        dd["y_method"] = oil
-        return dd, "1 / накопленная добыча жидкости", "Накопленная добыча нефти, т", "oil_from_liquid_inv"
-    if method == "sazonov":
-        dd["x_method"] = np.log(liquid)
-        dd["y_method"] = oil
-        return dd, "LN(накопленная добыча жидкости)", "Накопленная добыча нефти, т", "oil_from_liquid_log"
-    if method == "maksimov":
-        dd["x_method"] = np.log(water)
-        dd["y_method"] = oil
-        return dd, "LN(накопленная добыча воды)", "Накопленная добыча нефти, т", "oil_from_water_log"
-    dd["x_method"] = oil
-    dd["y_method"] = vnf
-    return dd, "Накопленная добыча нефти, т", "ВНФ накопленный", "vnf_from_oil"
-
-
-def _implied_recoverable_oil(dd: pd.DataFrame) -> float:
-    if "kin" not in dd.columns or "dobycha_nefti_cum" not in dd.columns:
-        return np.nan
-    reserve = safe_div(dd["dobycha_nefti_cum"], dd["kin"] / 100)
-    reserve = pd.Series(pd.to_numeric(reserve, errors="coerce")).replace([np.inf, -np.inf], np.nan).dropna()
-    reserve = reserve[reserve > 0]
-    if reserve.empty:
-        return np.nan
-    return float(reserve.median())
-
-
-def _kin_from_oil(target_oil: float, recoverable_oil: float) -> float:
-    if not np.isfinite(target_oil) or not np.isfinite(recoverable_oil) or recoverable_oil <= 0:
-        return np.nan
-    return float(target_oil / recoverable_oil * 100)
-
-
-def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
-    if not np.isfinite(oil_min) or oil_min <= 0:
-        oil_min = 1.0
-    if not np.isfinite(oil_max) or oil_max <= oil_min:
-        oil_max = oil_min * 2
-
-    def x_from_oil(oil_value):
-        if mode in {"oil_from_liquid_log"}:
-            return np.log(oil_value * (1 + target_vnf))
-        if mode in {"oil_from_liquid_inv"}:
-            return 1 / (oil_value * (1 + target_vnf))
-        if mode == "oil_from_water_log":
-            return np.log(oil_value * target_vnf)
-        if mode == "oil_from_liquid_inv_sqrt":
-            return 1 / np.sqrt(oil_value * (1 + target_vnf))
-        return oil_value
-
-    def residual(oil_value):
-        if mode == "vnf_from_oil":
-            return float(model_fn([oil_value])[0] - target_vnf)
-        return float(model_fn([x_from_oil(oil_value)])[0] - oil_value)
-
-    low = max(oil_min * 0.25, 1e-9)
-    high = oil_max * 1.5
-    last_high = high
-    for _ in range(40):
-        f_low = residual(low)
-        f_high = residual(high)
-        if np.isfinite(f_low) and np.isfinite(f_high) and f_low * f_high <= 0:
-            for _ in range(80):
-                mid = (low + high) / 2
-                f_mid = residual(mid)
-                if not np.isfinite(f_mid):
-                    break
-                if abs(f_mid) < 1e-6:
-                    return float(mid)
-                if f_low * f_mid <= 0:
-                    high = mid
-                    f_high = f_mid
-                else:
-                    low = mid
-                    f_low = f_mid
-            return float((low + high) / 2)
-        last_high = high
-        high *= 1.8
-    return float(last_high)
-
-
-def normalize_period_value(period_value):
-    if not isinstance(period_value, (list, tuple)) or len(period_value) != 2:
-        return tuple(DEFAULT_DISPLACEMENT_PERIOD)
-    start, end = pd.to_numeric(pd.Series(period_value), errors="coerce").fillna(pd.Series(DEFAULT_DISPLACEMENT_PERIOD)).astype(int)
-    return (min(int(start), int(end)), max(int(start), int(end)))
-
-
-def displacement_characteristic_figure(yearly_agg, method: str, method_name: str, period_value=None):
-    if yearly_agg is None or yearly_agg.empty:
-        return empty_fig("Нет данных для характеристики вытеснения", height=460)
-    vnf_col = "vnf_nak" if "vnf_nak" in yearly_agg.columns else "vnf_tek"
-    required = ["year", "kin", vnf_col, "dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"]
-    missing = [col for col in required if col not in yearly_agg.columns]
-    if missing:
-        return empty_fig(f"Нет данных: {', '.join(missing)}", height=460)
-
-    start_year, end_year = normalize_period_value(period_value)
-    dd = yearly_agg[required].copy()
-    for col in required:
-        dd[col] = pd.to_numeric(dd[col], errors="coerce")
-    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=required)
-    dd = dd[(dd[vnf_col] > 0) & (dd["dobycha_nefti_cum"] > 0)].sort_values("year")
-    if dd.empty:
-        return empty_fig("Нет точек после фильтрации", height=460)
-
-    dd, x_title, y_title, target_mode = _displacement_prepare_axes(dd, method, vnf_col)
-    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=["x_method", "y_method", "kin", "dobycha_nefti_cum"])
-    if dd.empty:
-        return empty_fig("Нет точек после преобразования характеристики", height=460)
-
-    period_mask = dd["year"].between(start_year, end_year, inclusive="both")
-    trend_df = dd[period_mask].dropna(subset=["x_method", "y_method"])
-    recoverable_oil = _implied_recoverable_oil(dd)
-
-    fig = go.Figure()
-    common_customdata = np.column_stack([dd["year"], dd[vnf_col], dd["dobycha_nefti_cum"], dd["kin"]])
-    fig.add_trace(go.Scatter(
-        x=dd["x_method"], y=dd["y_method"], mode="markers+lines", name="Факт",
-        marker=dict(size=8, color=OP_GREEN), line=dict(color=_rgba_from_hex(OP_GREEN, 0.35), width=1.5),
-        customdata=common_customdata,
-        hovertemplate="Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>Нак. нефть %{customdata[2]:,.0f} т<br>КИН %{customdata[3]:.2f}%<extra></extra>",
-    ))
-    if not trend_df.empty:
-        fig.add_trace(go.Scatter(
-            x=trend_df["x_method"], y=trend_df["y_method"], mode="markers", name=f"Период {start_year}-{end_year}",
-            marker=dict(size=11, color=OP_RED, symbol="circle-open", line=dict(width=2)),
-            customdata=np.column_stack([trend_df["year"], trend_df[vnf_col], trend_df["dobycha_nefti_cum"], trend_df["kin"]]),
-            hovertemplate="Период тренда<br>Год %{customdata[0]:.0f}<br>ВНФ %{customdata[1]:.2f}<br>Нак. нефть %{customdata[2]:,.0f} т<br>КИН %{customdata[3]:.2f}%<extra></extra>",
-        ))
-
-    if len(trend_df) >= 2:
-        def predict(xs):
-            return _linear_predict(trend_df["x_method"], trend_df["y_method"], xs)
-
-        target_oil = _solve_target_oil_from_vnf(predict, DISPLACEMENT_TARGET_VNF, target_mode, dd["dobycha_nefti_cum"].min(), dd["dobycha_nefti_cum"].max())
-        target_kin = _kin_from_oil(target_oil, recoverable_oil)
-        if target_mode == "vnf_from_oil":
-            target_x = target_oil
-            target_y = DISPLACEMENT_TARGET_VNF
-        elif target_mode == "oil_from_water_log":
-            target_x = np.log(target_oil * DISPLACEMENT_TARGET_VNF)
-            target_y = target_oil
-        elif target_mode == "oil_from_liquid_inv":
-            target_x = 1 / (target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-            target_y = target_oil
-        elif target_mode == "oil_from_liquid_inv_sqrt":
-            target_x = 1 / np.sqrt(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-            target_y = target_oil
-        else:
-            target_x = np.log(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-            target_y = target_oil
-
-        x_min = float(trend_df["x_method"].min())
-        x_max = float(trend_df["x_method"].max())
-        x_line = np.linspace(min(x_min, target_x), max(x_max, target_x), 80)
-        y_line = predict(x_line)
-        fig.add_trace(go.Scatter(
-            x=x_line, y=y_line, mode="lines", name=f"Тренд {start_year}-{end_year} до ВНФ=49",
-            line=dict(color=OP_RED, width=2.4, dash="dash"),
-            hovertemplate=f"Тренд<br>{y_title} %{{y:,.2f}}<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=[target_x], y=[target_y], mode="markers+text", name="Прогноз при ВНФ=49",
-            marker=dict(size=12, color=OP_AMBER, symbol="diamond"),
-            text=[f"ВНФ=49; Qн={target_oil:,.0f} т; КИН={target_kin:.2f}%"], textposition="top center",
-            customdata=[[target_oil, target_kin]],
-            hovertemplate="ВНФ=49<br>Нак. нефть %{customdata[0]:,.0f} т<br>КИН %{customdata[1]:.2f}%<extra></extra>",
-        ))
-    else:
-        fig.add_annotation(text="Для тренда нужны минимум 2 точки в выбранном периоде", xref="paper", yref="paper", x=0.5, y=0.96, showarrow=False, font=dict(color=OP_MUTED, size=11))
-
-    fig.update_layout(
-        xaxis_title=x_title,
-        yaxis_title=y_title,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=56, r=28, t=64, b=54),
-    )
-    return apply_theme(fig, height=460, compact=True)
-
-def displacement_card(title, graph_id, slider_id):
-    return html.Div(
-        [
-            html.Div(title, className="section-caption"),
-            html.Div("Период для построения линии тренда", className="small text-muted mb-2"),
-            dcc.RangeSlider(
-                id=slider_id,
-                min=2000,
-                max=2035,
-                step=1,
-                value=DEFAULT_DISPLACEMENT_PERIOD,
-                marks={year: str(year) for year in range(2000, 2036, 5)},
-                allowCross=False,
-                tooltip={"placement": "bottom", "always_visible": False},
-            ),
-            dcc.Graph(
-                id=graph_id,
-                className="dash-chart compact-chart",
-                style={"height": "460px", "width": "100%"},
-                responsive=True,
-                config={"responsive": True, "displayModeBar": False},
-            ),
-        ],
-        className="panel-card",
-    )
-
 ANALYSIS_SPECS = [
     ("g04", "debit_liq", "kiz", "4. Дебит жидкости от КИЗ", "КИЗ, %", "Дебит жидкости, т/сут"),
     ("g05", "debit_liq", "stepen_promyvki", "5. Дебит жидкости от степени промывки", "Степень промывки, %", "Дебит жидкости, т/сут"),
@@ -1342,74 +1100,44 @@ ANALYSIS_SPECS = [
     ("g22", "kin", "vnf_tek", "22. КИН от LN(ВНФ тек.)", "LN(ВНФ тек.)", "КИН, %"),
 ]
 
-PRIMARY_ASSET_SPEC_IDS = {"g16", "g20"}
-ADDITIONAL_ANALYSIS_SPECS = [spec for spec in ANALYSIS_SPECS if spec[0] not in PRIMARY_ASSET_SPEC_IDS]
-
-DISPLACEMENT_TARGET_VNF = 49.0
-DEFAULT_DISPLACEMENT_PERIOD = [2020, 2025]
-DISPLACEMENT_SPECS = [
-    ("disp-pirverdyan", "Характеристика вытеснения: метод Пирвердяна", "Пирвердян", "ln_vnf"),
-    ("disp-vnf", "Характеристика вытеснения: водонефтяной фактор", "ВНФ", "vnf"),
-    ("disp-kambarov", "Характеристика вытеснения: метод Камбарова", "Камбаров", "kambarov"),
-    ("disp-sazonov", "Характеристика вытеснения: метод Сазонова", "Сазонов", "sazonov"),
-    ("disp-maksimov", "Характеристика вытеснения: метод Максимова", "Максимов", "maksimov"),
-]
-
 
 def filters_layout():
-    """Глобальные фильтры, влияющие на вкладки дашборда."""
+    """Глобальные фильтры, влияющие на обе вкладки."""
     return html.Div(
         dbc.Row(
             [
                 dbc.Col(
                     [
-                        html.Label("Месторождение"),
-                        dcc.Dropdown(
-                            id="mest-filter",
-                            options=_options_with_all(ALL_MEST, "Все месторождения", ALL_MEST_VALUE),
-                            value=[ALL_MEST_VALUE],
-                            multi=True,
-                            persistence=True,
-                        ),
-                    ],
-                    lg=3,
-                    md=6,
-                ),
-                dbc.Col(
-                    [
                         html.Label("НГДУ"),
                         dcc.Dropdown(
                             id="ngdu-filter",
-                            options=_options_with_all(ALL_NGDU, "Все НГДУ", ALL_NGDU_VALUE),
-                            value=[ALL_NGDU_VALUE],
+                            options=[{"label": str(x), "value": x} for x in ALL_NGDU],
+                            value=ALL_NGDU,
                             multi=True,
                             persistence=True,
                         ),
                     ],
-                    lg=3,
-                    md=6,
+                    md=5,
                 ),
                 dbc.Col(
                     [
                         html.Label("Площадь"),
                         dcc.Dropdown(
                             id="area-filter",
-                            options=_options_with_all(ALL_AREAS, "Все площади", ALL_AREAS_VALUE),
-                            value=[ALL_AREAS_VALUE],
+                            options=[{"label": str(x), "value": x} for x in ALL_AREAS],
+                            value=ALL_AREAS,
                             multi=True,
                             persistence=True,
                         ),
                     ],
-                    lg=4,
-                    md=8,
+                    md=5,
                 ),
                 dbc.Col(
                     [
                         html.Label("Фильтры"),
                         html.Button("Сбросить", id="reset-filters", n_clicks=0, className="btn-reset"),
                     ],
-                    lg=2,
-                    md=4,
+                    md=2,
                 ),
             ],
             className="g-3",
@@ -1502,46 +1230,16 @@ def asset_tab_layout():
                     dbc.Col(graph_card("3. Динамика соотношения фонда", "g03"), lg=6, className="mb-4"),
                 ]
             ),
-            dbc.Row(
-                [
-                    dbc.Col(graph_card("16. Обводнённость от КИЗ", "g16", "440px", compact=True), lg=6, md=12, className="mb-4"),
-                    dbc.Col(graph_card("17. Соотношение доб/наг от Qприем/Qжидк", "g20", "440px", compact=True), lg=6, md=12, className="mb-4"),
-                ]
-            ),
+            # Scatter-графики лучше показывать в 2 колонки: в 3 колонках
+            # Plotly не хватает ширины для осей, легенды и trendline.
+            dbc.Row([dbc.Col(graph_card(spec[3], spec[0], "440px", compact=True), lg=6, md=12, className="mb-4") for spec in ANALYSIS_SPECS[:6]]),
             dbc.Row([dbc.Col(graph_card("11. Степень прокачки/промывки и темпы от КИН", "g11", "560px"), lg=12, className="mb-4")]),
-            html.Div(
-                html.Button("Построить дополнительные метрики", id="build-extra-metrics", n_clicks=0, className="btn-reset extra-metrics-button"),
-                className="extra-metrics-actions mb-4",
-            ),
-            html.Div(
-                [
-                    dbc.Row(
-                        [
-                            dbc.Col(graph_card(spec[3], spec[0], "440px", compact=True), lg=6, md=12, className="mb-4")
-                            for spec in ADDITIONAL_ANALYSIS_SPECS
-                        ]
-                    ),
-                    html.Div("Характеристики вытеснения по выбранной площади", className="section-caption mt-3 mb-3"),
-                    dbc.Row(
-                        [
-                            dbc.Col(displacement_card(title, graph_id, f"{graph_id}-period"), lg=6, md=12, className="mb-4")
-                            for graph_id, title, _method_name, _method in DISPLACEMENT_SPECS
-                        ]
-                    ),
-                ],
-                id="additional-metrics-container",
-                style={"display": "none"},
-            ),
+            dbc.Row([dbc.Col(graph_card(spec[3], spec[0], "440px", compact=True), lg=6, md=12, className="mb-4") for spec in ANALYSIS_SPECS[6:]]),
         ]
     )
 
 
-app = Dash(
-    __name__,
-    assets_folder="assets",
-    external_stylesheets=[dbc.themes.BOOTSTRAP],
-    suppress_callback_exceptions=True,
-)
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Дашборд разработки · Татнефть"
 app.index_string = """
 <!DOCTYPE html>
@@ -1561,36 +1259,9 @@ app.index_string = """
     </body>
 </html>
 """
-server = app.server
-qwen_console.register_routes(server)
-gtm_analysis.register_callbacks(app)
-
-
-@server.route("/health")
-def health():
-    return {"status": "ok", "data_source": settings.data_source}
-
-
-@server.route("/ready")
-def ready():
-    db_ok = True if settings.is_parquet else check_database_connection()
-    redis_ok = check_redis_connection()
-    try:
-        dataset_version = data_service.get_dataset_version_cached()
-    except Exception:
-        logger.exception("Dataset version readiness check failed")
-        dataset_version = None
-    status_code = 200 if db_ok and dataset_version else 503
-    return {
-        "status": "ready" if status_code == 200 else "not_ready",
-        "database": db_ok,
-        "redis": redis_ok,
-        "dataset_version": dataset_version,
-    }, status_code
 
 app.layout = html.Div(
     [
-        dcc.Store(id="theme-store", storage_type="local", data="light"),
         html.Div(
             dbc.Row(
                 [
@@ -1601,24 +1272,7 @@ app.layout = html.Div(
                         ],
                         md=7,
                     ),
-                    dbc.Col(
-                        html.Div(
-                            [
-                                html.Button(
-                                    "Темная тема",
-                                    id="theme-toggle",
-                                    n_clicks=0,
-                                    className="theme-toggle",
-                                    title="Переключить тему",
-                                    **{"aria-label": "Переключить темный режим"},
-                                ),
-                                html.Div(id="dataset-badge", className="dataset-badge"),
-                            ],
-                            className="topbar-actions",
-                        ),
-                        md=5,
-                        className="text-end",
-                    ),
+                    dbc.Col(html.Div(id="dataset-badge", className="dataset-badge float-end"), md=5, className="text-end"),
                 ],
                 align="center",
             ),
@@ -1635,8 +1289,6 @@ app.layout = html.Div(
                     children=[
                         dbc.Tab(label="Основные показатели", tab_id="tab-main"),
                         dbc.Tab(label="Анализ по активу", tab_id="tab-asset"),
-                        dbc.Tab(label="Анализ эффективности ГТМ", tab_id="tab-gtm"),
-                        dbc.Tab(label="Консоль Qwen", tab_id="tab-qwen"),
                     ],
                 ),
                 dcc.Loading(html.Div(id="scenario-content"), type="circle", color=OP_GREEN),
@@ -1645,113 +1297,75 @@ app.layout = html.Div(
             className="py-4 px-4",
         ),
     ],
-    id="app-shell",
-    className="shell theme-light",
+    className="shell",
 )
 
 
 @app.callback(
-    Output("theme-store", "data"),
-    Input("theme-toggle", "n_clicks"),
-    State("theme-store", "data"),
+    Output("ngdu-filter", "value"),
+    Input("reset-filters", "n_clicks"),
     prevent_initial_call=True,
 )
-def toggle_theme(_clicks, current_theme):
-    return "light" if normalize_theme(current_theme) == "dark" else "dark"
+def reset_ngdu_filter(_):
+    return ALL_NGDU
 
 
 @app.callback(
-    Output("app-shell", "className"),
-    Output("theme-toggle", "children"),
-    Output("theme-toggle", "title"),
-    Input("theme-store", "data"),
-)
-def apply_app_theme(theme):
-    theme_name = normalize_theme(theme)
-    is_dark = theme_name == "dark"
-    return (
-        f"shell theme-{theme_name}",
-        "Светлая тема" if is_dark else "Темная тема",
-        "Переключить на светлую тему" if is_dark else "Переключить на темную тему",
-    )
-
-
-@app.callback(
-    Output("mest-filter", "options"),
-    Output("mest-filter", "value"),
-    Output("ngdu-filter", "options"),
-    Output("ngdu-filter", "value"),
     Output("area-filter", "options"),
     Output("area-filter", "value"),
     Output("scenario-tabs", "active_tab"),
-    Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
     Input("reset-filters", "n_clicks"),
     Input("scenario-tabs", "active_tab"),
 )
-def sync_global_filters(selected_mest, selected_ngdu, selected_areas, _reset_clicks, active_tab):
+def sync_area_options_and_tab(selected_ngdu, selected_areas, _reset_clicks, active_tab):
+    d = dfy.copy()
+    if selected_ngdu:
+        d = d[d["ngdu"].isin(selected_ngdu)]
+
+    areas = sorted([x for x in d[AREA_COL_YEAR].dropna().unique()])
+    options = [{"label": str(x), "value": x} for x in areas]
     trigger = ctx.triggered_id
 
+    values = selected_areas or areas
+    values = [x for x in values if x in areas]
+
     if trigger == "reset-filters":
-        selected_mest = [ALL_MEST_VALUE]
-        selected_ngdu = [ALL_NGDU_VALUE]
-        selected_areas = [ALL_AREAS_VALUE]
+        values = areas
         active_tab = "tab-main"
 
-    mest_values = data_service.get_mest_options()
-    mest_value = _selected_or_all(selected_mest, mest_values, ALL_MEST_VALUE)
-    mest_key = _filter_key(mest_value, ALL_MEST_VALUE)
+    elif trigger == "scenario-tabs":
+        # При ручном переходе на «Анализ по активу» выбираем любую одну площадь,
+        # чтобы вкладка сразу показывала детальный анализ конкретного актива.
+        if active_tab == "tab-asset" and len(values) != 1:
+            values = [areas[0]] if areas else []
+        # Ручной переход на «Основные показатели» оставляем как выбор пользователя.
 
-    ngdu_values = data_service.get_ngdu_options(mest_key)
-    ngdu_value = _selected_or_all(selected_ngdu, ngdu_values, ALL_NGDU_VALUE)
-    ngdu_key = _filter_key(ngdu_value, ALL_NGDU_VALUE)
-
-    area_values = data_service.get_area_options(ngdu_key, mest_key)
-    area_value = _selected_or_all(selected_areas, area_values, ALL_AREAS_VALUE)
-    area_key = _filter_key(area_value, ALL_AREAS_VALUE)
-
-    if trigger == "area-filter" and len(area_key) == 1:
+    elif trigger == "area-filter" and active_tab == "tab-asset":
+        # Во вкладке «Анализ по активу» фильтр «Площадь» работает как одиночный выбор.
+        # В multi-dropdown Dash новая выбранная площадь обычно добавляется в конец списка.
+        if len(values) > 1:
+            values = [values[-1]]
+        elif len(values) == 0 and areas:
+            values = [areas[0]]
         active_tab = "tab-asset"
-    elif trigger == "reset-filters":
-        active_tab = "tab-main"
 
-    if active_tab == "tab-asset":
-        selected_area_values = [
-            item
-            for item in _as_list(selected_areas)
-            if item != ALL_AREAS_VALUE and item in set(area_values)
-        ]
-        if trigger == "area-filter" and selected_area_values:
-            area_value = [selected_area_values[-1]]
-        elif len(_filter_key(area_value, ALL_AREAS_VALUE)) != 1:
-            area_value = [area_values[0]] if area_values else [ALL_AREAS_VALUE]
-        area_key = _filter_key(area_value, ALL_AREAS_VALUE)
+    else:
+        # При выборе ровно одной площади в фильтре автоматически открываем анализ по активу.
+        active_tab = "tab-asset" if len(values) == 1 else "tab-main"
 
-    return (
-        _options_with_all(mest_values, "Все месторождения", ALL_MEST_VALUE),
-        mest_value,
-        _options_with_all(ngdu_values, "Все НГДУ", ALL_NGDU_VALUE),
-        ngdu_value,
-        _options_with_all(area_values, "Все площади", ALL_AREAS_VALUE),
-        area_value,
-        active_tab,
-    )
+    return options, values, active_tab
 
 
 @app.callback(
     Output("dataset-badge", "children"),
     Output("executive-kpi", "children"),
-    Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
 )
-def update_header(selected_mest, selected_ngdu, selected_areas):
-    started = time.perf_counter()
-    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
-    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
-    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
-    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
+def update_header(selected_ngdu, selected_areas):
+    d = filter_year_data(selected_ngdu, selected_areas)
     if d.empty:
         return [html.Span(className="live-dot"), "нет данных"], dbc.Row(
             [dbc.Col(html.Div([html.Div("Нет данных", className="metric-title"), html.Div("—", className="metric-value")], className="metric-card"), md=12)]
@@ -1771,40 +1385,30 @@ def update_header(selected_mest, selected_ngdu, selected_areas):
     p_inj = prev["zakachka"].sum() if "zakachka" in prev.columns and not prev.empty else np.nan
     p_wc = prev["wc"].mean() if "wc" in prev.columns and not prev.empty else np.nan
 
-    by_year = aggregation_service.get_header_year_aggregate(ngdu_key, area_key, mest_key).rename(
-        columns={"dobycha_nefti": "oil", "dobycha_liq": "liq", "zakachka": "inj"}
+    by_year = d.groupby("year", as_index=False).agg(
+        oil=("dobycha_nefti", "sum"),
+        liq=("dobycha_liq", "sum"),
+        inj=("zakachka", "sum"),
+        wc=("wc", "mean"),
     )
 
     led_oil = "led-green" if pd.isna(p_oil) or oil >= p_oil else "led-red"
     led_wc = "led-green" if pd.notna(wc_val) and wc_val < 60 else ("led-amber" if pd.notna(wc_val) and wc_val < 80 else "led-red")
 
-    ngdu_label = f"{len(ngdu_key)} НГДУ" if ngdu_key else "Все НГДУ"
-    mest_label = f"{len(mest_key)} мест." if mest_key else "Все месторождения"
-    badge = [html.Span(className="live-dot"), f"{ly} · {cur[AREA_COL_YEAR].nunique()} площ. · {ngdu_label} · {mest_label}"]
+    badge = [html.Span(className="live-dot"), f"{ly} · {cur[AREA_COL_YEAR].nunique()} площ. · {len(selected_ngdu or [])} НГДУ"]
     cards = dbc.Row(
         [
-            dbc.Col(metric_card("Добыча нефти", compact(oil), "т", delta_block(oil, p_oil), sparkline(by_year["year"], by_year["oil"], KPI_OIL_RED), led_oil, KPI_OIL_RED), lg=3, md=6, className="mb-3"),
-            dbc.Col(metric_card("Добыча жидкости", compact(liq), "т", delta_block(liq, p_liq), sparkline(by_year["year"], by_year["liq"], KPI_LIQ_GREEN), "led-green", KPI_LIQ_GREEN), lg=3, md=6, className="mb-3"),
-            dbc.Col(metric_card("Закачка воды", compact(inj), "м³", delta_block(inj, p_inj), sparkline(by_year["year"], by_year["inj"], KPI_INJ_BLUE), "led-green", KPI_INJ_BLUE), lg=3, md=6, className="mb-3"),
-            dbc.Col(metric_card("Обводнённость", compact(wc_val), "%", delta_block(wc_val, p_wc, unit_pp=True, positive_is_bad=True), sparkline(by_year["year"], by_year["wc"], KPI_WC_CYAN), led_wc, KPI_WC_CYAN), lg=3, md=6, className="mb-3"),
+            dbc.Col(metric_card("Добыча нефти", compact(oil), "т", delta_block(oil, p_oil), sparkline(by_year["year"], by_year["oil"], OP_GREEN), led_oil), lg=3, md=6, className="mb-3"),
+            dbc.Col(metric_card("Добыча жидкости", compact(liq), "т", delta_block(liq, p_liq), sparkline(by_year["year"], by_year["liq"], "#52A8D8"), "led-green"), lg=3, md=6, className="mb-3"),
+            dbc.Col(metric_card("Закачка воды", compact(inj), "м³", delta_block(inj, p_inj), sparkline(by_year["year"], by_year["inj"], OP_AMBER), "led-green"), lg=3, md=6, className="mb-3"),
+            dbc.Col(metric_card("Обводнённость", compact(wc_val), "%", delta_block(wc_val, p_wc, unit_pp=True), sparkline(by_year["year"], by_year["wc"], OP_RED), led_wc), lg=3, md=6, className="mb-3"),
         ]
-    )
-    logger.info(
-        "callback=update_header mest_count=%s ngdu_count=%s area_count=%s total_ms=%.1f",
-        len(mest_key),
-        len(ngdu_key),
-        len(area_key),
-        (time.perf_counter() - started) * 1000,
     )
     return badge, cards
 
 
 @app.callback(Output("scenario-content", "children"), Input("scenario-tabs", "active_tab"))
 def render_tab(active_tab):
-    if active_tab == "tab-gtm":
-        return gtm_analysis.layout()
-    if active_tab == "tab-qwen":
-        return qwen_console.layout()
     if active_tab == "tab-asset":
         return asset_tab_layout()
     return main_tab_layout()
@@ -1815,211 +1419,49 @@ def render_tab(active_tab):
     Output("main-line", "figure"),
     Output("main-change", "figure"),
     Output("main-cross", "figure"),
-    Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
     Input("main-metric", "value"),
     Input("change-period", "value"),
-    Input("theme-store", "data"),
 )
-def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, theme):
-    started = time.perf_counter()
-    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
-    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
-    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
-    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
-    main_change = figure_service.get_cached_figure(
-        "main-change",
-        ngdu_key,
-        area_key,
-        {"metric": metric, "period": period, "selected_mest": mest_key},
-        lambda: change_bar(d, metric, period),
-    )
-    logger.info(
-        "callback=update_main mest_count=%s ngdu_count=%s area_count=%s metric=%s period=%s total_ms=%.1f",
-        len(mest_key),
-        len(ngdu_key),
-        len(area_key),
-        metric,
-        period,
-        (time.perf_counter() - started) * 1000,
-    )
-    return (
-        apply_runtime_theme(bar_last_year(d, metric), theme),
-        apply_runtime_theme(line_year_metric(d, metric), theme),
-        apply_runtime_theme(main_change, theme),
-        apply_runtime_theme(crossplot_debit_wc(d), theme),
-    )
-
-
-def _build_analysis_figure(spec_id, y, x, title, x_title, y_title, d, period_result):
-    if spec_id == "g17":
-        return niz_otbor_vs_wc_identity(d)
-    if spec_id == "g16":
-        return segmented_wc_kiz(d, period_result=period_result)
-    if spec_id == "g20":
-        return ratio_vs_q_by_wc_kiz_periods(d, period_result=period_result)
-    return scatter_metric(
-        d,
-        x=x,
-        y=y,
-        title=title,
-        x_title=x_title,
-        y_title=y_title,
-        log_x=(spec_id == "g22"),
-        show_trendline=(spec_id in {"g13", "g22"}),
-    )
+def update_main(selected_ngdu, selected_areas, metric, period):
+    d = filter_year_data(selected_ngdu, selected_areas)
+    return bar_last_year(d, metric), line_year_metric(d, metric), change_bar(d, metric, period), crossplot_debit_wc(d)
 
 
 @app.callback(
-    Output("g01", "figure"),
-    Output("g02", "figure"),
-    Output("g03", "figure"),
-    Output("g16", "figure"),
-    Output("g20", "figure"),
-    Output("g11", "figure"),
-    Input("mest-filter", "value"),
+    [Output("g01", "figure"), Output("g02", "figure"), Output("g03", "figure"), Output("g11", "figure")] + [Output(spec[0], "figure") for spec in ANALYSIS_SPECS],
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
-    Input("theme-store", "data"),
 )
-def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
-    started = time.perf_counter()
-    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
-    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
-    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
-    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
-    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key)
-    period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, n_periods=6, min_size=5)
-
-    def safe_build(name, builder):
-        try:
-            return builder()
-        except Exception:
-            logger.exception("Figure build failed name=%s", name)
-            return empty_fig(f"Ошибка построения {name}")
-
-    figs = [
-        safe_build(
-            "g01",
-            lambda: figure_service.get_cached_figure(
-                "g01",
-                ngdu_key,
-                area_key,
-                {"selected_mest": mest_key},
-                lambda: tech_dynamics(d, yearly_agg),
-                use_lock=True,
-            ),
-        ),
-        safe_build("g02", lambda: fund_dynamics(d, yearly_agg)),
-        safe_build("g03", lambda: fund_ratio_dynamics(d, yearly_agg)),
-        safe_build(
-            "g16",
-            lambda: figure_service.get_cached_figure(
-                "g16",
-                ngdu_key,
-                area_key,
-                {"selected_mest": mest_key, "n_periods": 6, "min_size": 5},
-                lambda: segmented_wc_kiz(d, period_result=period_result),
-                use_lock=True,
-            ),
-        ),
-        safe_build(
-            "g20",
-            lambda: figure_service.get_cached_figure(
-                "g20",
-                ngdu_key,
-                area_key,
-                {"selected_mest": mest_key, "n_periods": 6, "min_size": 5},
-                lambda: ratio_vs_q_by_wc_kiz_periods(d, period_result=period_result),
-                use_lock=True,
-            ),
-        ),
-        safe_build("g11", lambda: pumping_washing_vs_kin(d)),
-    ]
-    logger.info(
-        "callback=update_asset mest_count=%s ngdu_count=%s area_count=%s figures=%s total_ms=%.1f",
-        len(mest_key),
-        len(ngdu_key),
-        len(area_key),
-        len(figs),
-        (time.perf_counter() - started) * 1000,
-    )
-    return [apply_runtime_theme(fig, theme) for fig in figs]
-
-
-@app.callback(
-    Output("additional-metrics-container", "style"),
-    *[Output(spec[0], "figure") for spec in ADDITIONAL_ANALYSIS_SPECS],
-    *[Output(spec[0], "figure") for spec in DISPLACEMENT_SPECS],
-    Input("build-extra-metrics", "n_clicks"),
-    Input("mest-filter", "value"),
-    Input("ngdu-filter", "value"),
-    Input("area-filter", "value"),
-    Input("theme-store", "data"),
-    *[Input(f"{spec[0]}-period", "value") for spec in DISPLACEMENT_SPECS],
-)
-def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, theme, *displacement_periods):
-    if not n_clicks:
-        hidden_count = len(ADDITIONAL_ANALYSIS_SPECS) + len(DISPLACEMENT_SPECS)
-        hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * hidden_count
-        return [{"display": "none"}] + hidden_figs
-
-    started = time.perf_counter()
-    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
-    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
-    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
-    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
-    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key)
-    period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, n_periods=6, min_size=5)
-
-    def safe_build(name, builder):
-        try:
-            return builder()
-        except Exception:
-            logger.exception("Figure build failed name=%s", name)
-            return empty_fig(f"Ошибка построения {name}")
-
-    figs = []
-    for spec_id, y, x, title, x_title, y_title in ADDITIONAL_ANALYSIS_SPECS:
+def update_asset(selected_ngdu, selected_areas):
+    d = filter_year_data(selected_ngdu, selected_areas)
+    figs = [tech_dynamics(d), fund_dynamics(d), fund_ratio_dynamics(d), pumping_washing_vs_kin(d)]
+    trendline_cards = {"g13", "g22"}
+    for spec_id, y, x, title, x_title, y_title in ANALYSIS_SPECS:
+        if spec_id == "g17":
+            figs.append(niz_otbor_vs_wc_identity(d))
+            continue
+        if spec_id == "g16":
+            figs.append(segmented_wc_kiz(d))
+            continue
+        if spec_id == "g20":
+            figs.append(ratio_vs_q_by_wc_kiz_periods(d))
+            continue
         figs.append(
-            safe_build(
-                spec_id,
-                lambda spec_id=spec_id, y=y, x=x, title=title, x_title=x_title, y_title=y_title: _build_analysis_figure(
-                    spec_id,
-                    y,
-                    x,
-                    title,
-                    x_title,
-                    y_title,
-                    d,
-                    period_result,
-                ),
+            scatter_metric(
+                d,
+                x=x,
+                y=y,
+                title=title,
+                x_title=x_title,
+                y_title=y_title,
+                log_x=(spec_id == "g22"),
+                show_trendline=(spec_id in trendline_cards),
             )
         )
-    for (graph_id, _title, method_name, method), period_value in zip(DISPLACEMENT_SPECS, displacement_periods):
-        figs.append(
-            safe_build(
-                graph_id,
-                lambda method=method, method_name=method_name, period_value=period_value: displacement_characteristic_figure(
-                    yearly_agg,
-                    method,
-                    method_name,
-                    period_value,
-                ),
-            )
-        )
-
-    logger.info(
-        "callback=update_additional_asset_metrics mest_count=%s ngdu_count=%s area_count=%s figures=%s total_ms=%.1f",
-        len(mest_key),
-        len(ngdu_key),
-        len(area_key),
-        len(figs),
-        (time.perf_counter() - started) * 1000,
-    )
-    return [{"display": "block"}] + [apply_runtime_theme(fig, theme) for fig in figs]
+    return figs
 
 
 if __name__ == "__main__":
-    app.run(debug=settings.app_debug, host=settings.app_host, port=settings.app_port)
+    app.run(debug=True, host="10.241.112.254", port=8048)

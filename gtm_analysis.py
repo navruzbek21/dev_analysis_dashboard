@@ -39,6 +39,12 @@ from plotly.subplots import make_subplots
 # Константы визуализации
 # -----------------------------------------------------------------------------
 ALL = "ALL"
+EFFICIENCY_DELTA = "delta"
+EFFICIENCY_PLAN = "plan"
+EFFICIENCY_OPTIONS = [
+    {"label": "ΔQ нефти > 0 относительно дебита до ГТМ", "value": EFFICIENCY_DELTA},
+    {"label": "Факт 1-3 мес. > 90% qoil_plan", "value": EFFICIENCY_PLAN},
+]
 APP_TITLE = "Анализ эффективности ГТМ"
 APP_SUBTITLE = "Приросты, эффективность, динамика и структура дополнительной добычи"
 PLOT_TEMPLATE = "plotly_white"
@@ -264,6 +270,22 @@ def direction_filter_options() -> list[dict]:
     return dropdown_options_from_df(get_gtm_dataset().result_df, "направление", "Все направления")
 
 
+def normalize_efficiency_algorithm(value: str | None) -> str:
+    return EFFICIENCY_PLAN if value == EFFICIENCY_PLAN else EFFICIENCY_DELTA
+
+
+def apply_efficiency_algorithm(gtm_level: pd.DataFrame, algorithm: str | None) -> pd.DataFrame:
+    algorithm = normalize_efficiency_algorithm(algorithm)
+    if algorithm == EFFICIENCY_DELTA or gtm_level.empty:
+        return gtm_level
+    out = gtm_level.copy()
+    if "effective_plan" in out.columns:
+        out["effective"] = out["effective_plan"]
+    else:
+        out["effective"] = 0
+    return out
+
+
 def _selected_values(value) -> list:
     if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
         values = []
@@ -435,7 +457,7 @@ def normalize_result_df(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce")
 
-    for col in ["qliq", "qoil", "qinj", "wcut", "Р_пл", "Р_заб", "month_offset", "gtm_year", "year"]:
+    for col in ["qliq", "qoil", "qoil_plan", "qinj", "wcut", "Р_пл", "Р_заб", "month_offset", "gtm_year", "year"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
 
@@ -485,21 +507,99 @@ def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
     })
 
 
+def _group_metric_mean(df: pd.DataFrame, keys: list[str], value_columns: list[str], suffix: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=keys + [f"{column}_{suffix}" for column in value_columns])
+    return (
+        df.groupby(keys, dropna=False, sort=False)[value_columns]
+        .mean()
+        .add_suffix(f"_{suffix}")
+        .reset_index()
+    )
+
+
+def _first_by_month_offset(df: pd.DataFrame, keys: list[str], value_columns: list[str], suffix: str, ascending: bool) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=keys + [f"{column}_{suffix}" for column in value_columns])
+    first_rows = df.sort_values(keys + ["month_offset"], ascending=[True, True, ascending]).drop_duplicates(keys, keep="first")
+    return first_rows[keys + value_columns].rename(columns={column: f"{column}_{suffix}" for column in value_columns})
+
+
 def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
-    """Тяжёлый расчёт уровня ГТМ выполняется один раз при старте."""
+    """Быстрый расчёт уровня ГТМ без groupby.apply по каждой скважине.
+
+    Вкладка ГТМ строит все основные графики из этого агрегата. Предыдущая
+    реализация вызывала Python-функцию для каждой пары ``well``/``gtm_date``;
+    на больших parquet-файлах это надолго блокировало Dash callback и вкладка
+    оставалась в состоянии Updating. Здесь те же бизнес-правила выражены через
+    векторные groupby/merge операции Pandas.
+    """
     required = {"well", "gtm_date", "month_offset", "qliq", "qoil", "gtm_year"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"В result_df не хватает столбцов: {sorted(missing)}")
 
-    gtm_level = (
-        df.groupby(["well", "gtm_date"], dropna=False, sort=False, group_keys=False)
-        .apply(calc_delta_per_gtm)
-        .reset_index()
-    )
-    gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
-    return gtm_level
+    keys = ["well", "gtm_date"]
+    value_columns = ["qliq", "qoil"]
+    grouped = df.groupby(keys, dropna=False, sort=False)
+    gtm_level = grouped.agg(
+        gtm_year=("gtm_year", "first"),
+        qoil_plan=("qoil_plan", "first") if "qoil_plan" in df.columns else ("gtm_year", lambda _s: np.nan),
+        назначение=("назнач_скв_факт", "first") if "назнач_скв_факт" in df.columns else ("gtm_year", lambda _s: "Не указано"),
+        направление=("направление", "first") if "направление" in df.columns else ("gtm_year", lambda _s: np.nan),
+        mest=("mest", "first") if "mest" in df.columns else ("gtm_year", lambda _s: np.nan),
+        plosh=("plosh", "first") if "plosh" in df.columns else ("gtm_year", lambda _s: np.nan),
+    ).reset_index()
+    gtm_level["назначение"] = gtm_level["назначение"].fillna("Не указано")
 
+    before = df[df["month_offset"].lt(0)]
+    min_before = before.groupby(keys, dropna=False, sort=False)["month_offset"].min().rename("min_before_offset").reset_index()
+    gtm_level = gtm_level.merge(min_before, on=keys, how="left")
+    last3_before = before[before["month_offset"].isin([-3, -2, -1])]
+    base_last3 = _group_metric_mean(last3_before, keys, value_columns, "base_last3")
+    base_fallback = _first_by_month_offset(before, keys, value_columns, "base_fallback", ascending=False)
+
+    after_1_3 = df[df["month_offset"].isin([1, 2, 3])]
+    after_positive = df[df["month_offset"].gt(0)]
+    after_preferred = _group_metric_mean(after_1_3, keys, value_columns, "after_1_3")
+    after_fallback = _first_by_month_offset(after_positive, keys, value_columns, "after_fallback", ascending=True)
+
+    for frame in [base_last3, base_fallback, after_preferred, after_fallback]:
+        gtm_level = gtm_level.merge(frame, on=keys, how="left")
+
+    has_far_history = gtm_level["min_before_offset"].le(-36).fillna(False)
+    qliq_before = gtm_level["qliq_base_last3"].combine_first(gtm_level["qliq_base_fallback"]).fillna(0.0)
+    qoil_before = gtm_level["qoil_base_last3"].combine_first(gtm_level["qoil_base_fallback"]).fillna(0.0)
+    qliq_before = qliq_before.mask(has_far_history, 0.0)
+    qoil_before = qoil_before.mask(has_far_history, 0.0)
+
+    qliq_after = gtm_level["qliq_after_1_3"].combine_first(gtm_level["qliq_after_fallback"])
+    qoil_after = gtm_level["qoil_after_1_3"].combine_first(gtm_level["qoil_after_fallback"])
+    gtm_level["Δqliq"] = qliq_after - qliq_before
+    gtm_level["Δqoil"] = qoil_after - qoil_before
+    gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
+    gtm_level["effective_plan"] = np.where(
+        gtm_level["qoil_after_1_3"].notna() & gtm_level["qoil_plan"].notna() & (gtm_level["qoil_after_1_3"] > 0.9 * gtm_level["qoil_plan"]),
+        1,
+        0,
+    )
+
+    return gtm_level[
+        keys
+        + [
+            "Δqliq",
+            "Δqoil",
+            "qoil_after_1_3",
+            "qoil_plan",
+            "gtm_year",
+            "назначение",
+            "направление",
+            "mest",
+            "plosh",
+            "effective",
+            "effective_plan",
+        ]
+    ]
 
 def filter_df(df: pd.DataFrame, direction=ALL, plosh=ALL, mest=ALL) -> pd.DataFrame:
     mask = pd.Series(True, index=df.index)
@@ -999,22 +1099,24 @@ def fig_histogram(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None
 
 
 def make_bad_gtm_table(gtm_level: pd.DataFrame) -> tuple[list[dict], list[dict]]:
-    if gtm_level.empty:
+    if gtm_level.empty or "effective" not in gtm_level.columns:
         return [], []
 
     table = (
-        gtm_level[gtm_level["Δqoil"].lt(0)]
+        gtm_level[gtm_level["effective"].ne(1)]
         .sort_values("Δqoil")
         .assign(
             **{
                 "Дата ГТМ": lambda x: pd.to_datetime(x["gtm_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
                 "ΔQжидк": lambda x: x["Δqliq"].round(2),
                 "ΔQнефти": lambda x: x["Δqoil"].round(2),
+                "Qнефть факт 1-3 мес": lambda x: x["qoil_after_1_3"].round(2) if "qoil_after_1_3" in x else np.nan,
+                "Qнефть план": lambda x: x["qoil_plan"].round(2) if "qoil_plan" in x else np.nan,
             }
         )
         .rename(columns={"well": "Скважина", "gtm_year": "Год ГТМ", "назначение": "Назначение", "направление": "Направление", "plosh": "Площадь"})
     )
-    cols = ["Скважина", "Дата ГТМ", "ΔQжидк", "ΔQнефти", "Год ГТМ", "Назначение", "Направление", "Площадь"]
+    cols = ["Скважина", "Дата ГТМ", "ΔQжидк", "ΔQнефти", "Qнефть факт 1-3 мес", "Qнефть план", "Год ГТМ", "Назначение", "Направление", "Площадь"]
     cols = [c for c in cols if c in table.columns]
     data = table[cols].to_dict("records")
     columns = [{"name": c, "id": c} for c in cols]
@@ -1250,6 +1352,19 @@ def layout():
                                     id=cid("direction-filter"),
                                     options=direction_filter_options(),
                                     value=ALL,
+                                    clearable=False,
+                                    persistence=True,
+                                ),
+                            ],
+                            md=4,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Алгоритм эффективности"),
+                                dcc.Dropdown(
+                                    id=cid("efficiency-algorithm"),
+                                    options=EFFICIENCY_OPTIONS,
+                                    value=EFFICIENCY_DELTA,
                                     clearable=False,
                                     persistence=True,
                                 ),
@@ -1494,14 +1609,15 @@ def register_callbacks(app):
         Output(cid("data-table"), "columns"),
         Output(cid("boxplot-factors"), "figure"),
         Input(cid("direction-filter"), "value"),
+        Input(cid("efficiency-algorithm"), "value"),
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
         Input("theme-store", "data"),
     )
-    def update_dashboard(direction=ALL, plosh=ALL, mest=ALL, theme="light"):
+    def update_dashboard(direction=ALL, efficiency_algorithm=EFFICIENCY_DELTA, plosh=ALL, mest=ALL, theme="light"):
         dataset = get_gtm_dataset()
         filtered_result = filter_df(dataset.result_df, direction, plosh, mest)
-        filtered_gtm = filter_df(dataset.gtm_level, direction, plosh, mest)
+        filtered_gtm = apply_efficiency_algorithm(filter_df(dataset.gtm_level, direction, plosh, mest), efficiency_algorithm)
         direction_values = _selected_values(direction)
 
         table_data, table_columns = make_bad_gtm_table(filtered_gtm)

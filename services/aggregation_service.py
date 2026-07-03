@@ -22,6 +22,12 @@ def compute_asset_year_aggregate(d):
         dob_fond=("dob_fond", "sum"),
         nagn_fond=("nagn_fond", "sum"),
     )
+    for col in ["kin", "vnf_nak", "vnf_tek"]:
+        if col in d.columns:
+            agg_spec[col] = (col, "mean")
+    for col in ["dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"]:
+        if col in d.columns:
+            agg_spec[col] = (col, "sum")
     if "wc" in d.columns:
         agg_spec["wc"] = ("wc", "mean")
     elif "wc_month_avg" in d.columns:
@@ -71,7 +77,7 @@ def get_asset_year_aggregate(selected_ngdu, selected_areas, selected_mest=()):
                 "selected_ngdu": selected_ngdu,
                 "selected_areas": selected_areas,
                 "selected_mest": selected_mest,
-                "aggregate_version": "asset-year-v1",
+                "aggregate_version": "asset-year-v2",
             },
         ),
     )
