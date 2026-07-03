@@ -519,18 +519,123 @@ def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
     })
 
 
+def _first_existing_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [col for col in columns if col in df.columns]
+
+
 def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
-    """Тяжёлый расчёт уровня ГТМ выполняется один раз при старте."""
+    """Тяжёлый расчёт уровня ГТМ выполняется один раз при старте.
+
+    Векторизованная реализация сохраняет бизнес-правила calc_delta_per_gtm(),
+    но не запускает Python-функцию для каждой пары well/gtm_date. На больших
+    выгрузках это критично для первого открытия вкладки ГТМ.
+    """
     required = {"well", "gtm_date", "month_offset", "qliq", "qoil", "gtm_year"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"В result_df не хватает столбцов: {sorted(missing)}")
 
-    gtm_level = (
-        df.groupby(["well", "gtm_date"], dropna=False, sort=False, group_keys=False)
-        .apply(calc_delta_per_gtm)
-        .reset_index()
+    keys = ["well", "gtm_date"]
+    work = df.copy()
+    work["_row_order"] = np.arange(len(work))
+    meta_cols = _first_existing_columns(work, ["gtm_year", "назнач_скв_факт", "направление", "mest", "plosh"])
+
+    groups = work[keys].drop_duplicates().reset_index(drop=True)
+
+    if meta_cols:
+        meta = (
+            work.sort_values("_row_order")
+            .groupby(keys, dropna=False, sort=False)[meta_cols]
+            .first()
+            .reset_index()
+        )
+        groups = groups.merge(meta, on=keys, how="left")
+
+    before = work[work["month_offset"].lt(0)]
+    before_min = before.groupby(keys, dropna=False, sort=False)["month_offset"].min().rename("before_min")
+    before_last3 = (
+        before[before["month_offset"].isin([-3, -2, -1])]
+        .groupby(keys, dropna=False, sort=False)[["qliq", "qoil"]]
+        .mean()
+        .rename(columns={"qliq": "qliq_before_last3", "qoil": "qoil_before_last3"})
     )
+
+    if before.empty:
+        before_fallback = pd.DataFrame(
+            columns=["qliq_before_fallback", "qoil_before_fallback"],
+            index=pd.MultiIndex.from_tuples([], names=keys),
+        )
+    else:
+        before_fallback_idx = before.groupby(keys, dropna=False, sort=False)["month_offset"].idxmax()
+        before_fallback = (
+            before.loc[before_fallback_idx, keys + ["qliq", "qoil"]]
+            .set_index(keys)
+            .rename(columns={"qliq": "qliq_before_fallback", "qoil": "qoil_before_fallback"})
+        )
+
+    base = groups.set_index(keys).join(before_min).join(before_last3).join(before_fallback)
+    has_recent_base = base["qliq_before_last3"].notna() | base["qoil_before_last3"].notna()
+    use_zero_base = base["before_min"].isna() | base["before_min"].le(-36)
+    base["qliq_before"] = np.where(
+        use_zero_base,
+        0.0,
+        np.where(has_recent_base, base["qliq_before_last3"], base["qliq_before_fallback"]),
+    )
+    base["qoil_before"] = np.where(
+        use_zero_base,
+        0.0,
+        np.where(has_recent_base, base["qoil_before_last3"], base["qoil_before_fallback"]),
+    )
+
+    after_1_3 = (
+        work[work["month_offset"].isin([1, 2, 3])]
+        .groupby(keys, dropna=False, sort=False)[["qliq", "qoil"]]
+        .mean()
+        .rename(columns={"qliq": "qliq_after_1_3", "qoil": "qoil_after_1_3"})
+    )
+    after_any = work[work["month_offset"].gt(0)]
+    if after_any.empty:
+        after_fallback = pd.DataFrame(
+            columns=["qliq_after_fallback", "qoil_after_fallback"],
+            index=pd.MultiIndex.from_tuples([], names=keys),
+        )
+    else:
+        after_fallback_idx = after_any.groupby(keys, dropna=False, sort=False)["month_offset"].idxmin()
+        after_fallback = (
+            after_any.loc[after_fallback_idx, keys + ["qliq", "qoil"]]
+            .set_index(keys)
+            .rename(columns={"qliq": "qliq_after_fallback", "qoil": "qoil_after_fallback"})
+        )
+
+    calc = base.join(after_1_3).join(after_fallback)
+    calc["qliq_after"] = calc["qliq_after_1_3"].combine_first(calc["qliq_after_fallback"])
+    calc["qoil_after"] = calc["qoil_after_1_3"].combine_first(calc["qoil_after_fallback"])
+    calc["Δqliq"] = calc["qliq_after"] - calc["qliq_before"]
+    calc["Δqoil"] = calc["qoil_after"] - calc["qoil_before"]
+
+    if "qoil_plan" in work.columns:
+        plan = work.dropna(subset=["qoil_plan"]).groupby(keys, dropna=False, sort=False)["qoil_plan"].first()
+        calc = calc.join(plan)
+    else:
+        calc["qoil_plan"] = np.nan
+
+    gtm_level = calc.reset_index()
+    rename_cols = {"назнач_скв_факт": "назначение"}
+    gtm_level = gtm_level.rename(columns=rename_cols)
+    keep_cols = [
+        "well",
+        "gtm_date",
+        "Δqliq",
+        "Δqoil",
+        "qoil_after_1_3",
+        "qoil_plan",
+        "gtm_year",
+        "назначение",
+        "направление",
+        "mest",
+        "plosh",
+    ]
+    gtm_level = gtm_level[[col for col in keep_cols if col in gtm_level.columns]]
     gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
     if {"qoil_after_1_3", "qoil_plan"}.issubset(gtm_level.columns):
         gtm_level["effective_plan"] = np.where(gtm_level["qoil_after_1_3"] > 0.9 * gtm_level["qoil_plan"], 1, 0)
