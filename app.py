@@ -1160,6 +1160,127 @@ def _kin_from_oil(target_oil: float, recoverable_oil: float) -> float:
     return float(target_oil / recoverable_oil * 100)
 
 
+
+def _linear_coefficients(x, y) -> tuple[float, float]:
+    x = pd.to_numeric(pd.Series(x), errors="coerce")
+    y = pd.to_numeric(pd.Series(y), errors="coerce")
+    mask = x.notna() & y.notna()
+    if mask.sum() < 2:
+        return np.nan, np.nan
+    a, b = np.polyfit(x[mask], y[mask], 1)
+    return float(a), float(b)
+
+
+def _annual_vnf_for_displacement_x(x_value: float, a: float, b: float, mode: str) -> float:
+    if not all(np.isfinite(v) for v in [x_value, a, b]):
+        return np.nan
+    if mode == "vnf_from_oil":
+        return float(2 * a * x_value + b)
+    if mode == "oil_from_liquid_log":
+        liquid = np.exp(x_value)
+        return float(liquid / a - 1) if a != 0 else np.nan
+    if mode == "oil_from_water_log":
+        water = np.exp(x_value)
+        return float(water / a) if a != 0 else np.nan
+    if mode == "oil_from_liquid_inv":
+        return float(-1 / (a * x_value**2) - 1) if a != 0 and x_value != 0 else np.nan
+    if mode == "oil_from_liquid_inv_sqrt":
+        return float(-2 / (a * x_value**3) - 1) if a != 0 and x_value != 0 else np.nan
+    y_value = a * x_value + b
+    if mode == "vnf_from_liquid":
+        ratio = y_value
+        denominator = 1 + ratio
+        if denominator == 0:
+            return np.nan
+        correction = a * x_value / denominator
+        if np.isclose(1 - correction, 0):
+            return np.nan
+        return float((ratio + correction) / (1 - correction))
+    if mode == "liquid_oil_ratio_from_water":
+        ratio = y_value
+        denominator = ratio - 1 - a * x_value
+        if np.isclose(denominator, 0):
+            return np.nan
+        return float((ratio - 1) ** 2 / denominator)
+    if mode == "liquid_oil_ratio_from_liquid":
+        ratio = y_value
+        denominator = ratio - a * x_value
+        if np.isclose(denominator, 0):
+            return np.nan
+        return float(ratio**2 / denominator - 1)
+    return np.nan
+
+
+def _oil_water_from_displacement_x(x_value: float, a: float, b: float, mode: str) -> tuple[float, float]:
+    y_value = a * x_value + b
+    if mode == "vnf_from_oil":
+        oil = x_value
+        return float(oil), float(oil * y_value)
+    if mode == "oil_from_liquid_log":
+        liquid = np.exp(x_value)
+        return float(y_value), float(liquid - y_value)
+    if mode == "oil_from_water_log":
+        return float(y_value), float(np.exp(x_value))
+    if mode == "oil_from_liquid_inv":
+        liquid = 1 / x_value
+        return float(y_value), float(liquid - y_value)
+    if mode == "oil_from_liquid_inv_sqrt":
+        liquid = 1 / (x_value**2)
+        return float(y_value), float(liquid - y_value)
+    if mode == "vnf_from_liquid":
+        oil = x_value / (1 + y_value)
+        return float(oil), float(x_value - oil)
+    if mode == "liquid_oil_ratio_from_water":
+        oil = x_value / (y_value - 1)
+        return float(oil), float(x_value)
+    if mode == "liquid_oil_ratio_from_liquid":
+        oil = x_value / y_value
+        return float(oil), float(x_value - oil)
+    return np.nan, np.nan
+
+
+def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mode: str) -> float:
+    a, b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
+    if not np.isfinite(a) or not np.isfinite(b) or a == 0:
+        return np.nan
+    if mode == "vnf_from_oil":
+        return float((target_vnf - b) / (2 * a))
+    if mode == "oil_from_liquid_log":
+        target_liquid = a * (target_vnf + 1)
+        return float(np.log(target_liquid)) if target_liquid > 0 else np.nan
+    if mode == "oil_from_water_log":
+        target_water = a * target_vnf
+        return float(np.log(target_water)) if target_water > 0 else np.nan
+    if mode == "oil_from_liquid_inv":
+        denominator = a * (target_vnf + 1)
+        target_sq = -1 / denominator if denominator != 0 else np.nan
+        return float(np.sqrt(target_sq)) if target_sq > 0 else np.nan
+    if mode == "oil_from_liquid_inv_sqrt":
+        denominator = a * (target_vnf + 1)
+        target_cube = -2 / denominator if denominator != 0 else np.nan
+        return float(np.cbrt(target_cube)) if target_cube > 0 else np.nan
+
+    ordered = trend_df.sort_values("year")
+    x_start = float(ordered["x_method"].iloc[-1])
+    if len(ordered) >= 2:
+        x_prev = float(ordered["x_method"].iloc[-2])
+        direction = np.sign(x_start - x_prev)
+    else:
+        direction = 1.0
+    if direction == 0 or not np.isfinite(direction):
+        direction = np.sign(a) or 1.0
+
+    def residual(x_value):
+        return _annual_vnf_for_displacement_x(x_value, a, b, mode) - target_vnf
+
+    low = x_start
+    f_low = residual(low)
+    step = max(abs(x_start) * 0.1, 1.0)
+    high = x_start
+    f_high = f_low
+    for _ in range(80):
+        high = high + direction * step
+
 def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
     if not np.isfinite(oil_min) or oil_min <= 0:
         oil_min = 1.0
@@ -1194,25 +1315,26 @@ def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: 
     last_high = high
     for _ in range(40):
         f_low = residual(low)
+
         f_high = residual(high)
         if np.isfinite(f_low) and np.isfinite(f_high) and f_low * f_high <= 0:
+            left, right = low, high
+            f_left = f_low
             for _ in range(80):
-                mid = (low + high) / 2
+                mid = (left + right) / 2
                 f_mid = residual(mid)
                 if not np.isfinite(f_mid):
                     break
                 if abs(f_mid) < 1e-6:
                     return float(mid)
-                if f_low * f_mid <= 0:
-                    high = mid
-                    f_high = f_mid
+                if f_left * f_mid <= 0:
+                    right = mid
                 else:
-                    low = mid
-                    f_low = f_mid
-            return float((low + high) / 2)
-        last_high = high
-        high *= 1.8
-    return float(last_high)
+                    left = mid
+                    f_left = f_mid
+            return float((left + right) / 2)
+        step *= 1.4
+    return float(high) if np.isfinite(f_high) else np.nan
 
 
 def normalize_period_value(period_value):
@@ -1269,8 +1391,17 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         def predict(xs):
             return _linear_predict(trend_df["x_method"], trend_df["y_method"], xs)
 
-        target_oil = _solve_target_oil_from_vnf(predict, DISPLACEMENT_TARGET_VNF, target_mode, dd["dobycha_nefti_cum"].min(), dd["dobycha_nefti_cum"].max())
+        trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
+        last_trend_point = trend_df.sort_values("year").iloc[-1]
+        x_start = float(last_trend_point["x_method"])
+        target_x = _solve_target_x_for_annual_vnf(trend_df, DISPLACEMENT_TARGET_VNF, target_mode)
+        if not np.isfinite(target_x):
+            fig.add_annotation(text="Не удалось рассчитать точку годового ВНФ=49", xref="paper", yref="paper", x=0.5, y=0.9, showarrow=False, font=dict(color=OP_MUTED, size=11))
+            target_x = x_start
+        target_y = float(predict([target_x])[0])
+        target_oil, _target_water = _oil_water_from_displacement_x(target_x, trend_a, trend_b, target_mode)
         target_kin = _kin_from_oil(target_oil, recoverable_oil)
+
         if target_mode == "vnf_from_oil":
             target_x = target_oil
             target_y = DISPLACEMENT_TARGET_VNF
@@ -1298,6 +1429,7 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
 
         last_trend_point = trend_df.sort_values("year").iloc[-1]
         x_start = float(last_trend_point["x_method"])
+
         x_line = np.linspace(x_start, target_x, 80)
         y_line = predict(x_line)
         fig.add_trace(go.Scatter(
@@ -1308,9 +1440,9 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         fig.add_trace(go.Scatter(
             x=[target_x], y=[target_y], mode="markers+text", name="Прогноз при ВНФ=49",
             marker=dict(size=12, color=OP_AMBER, symbol="diamond"),
-            text=[f"ВНФ=49; Qн={target_oil:,.0f} т; КИН={target_kin:.2f}%"], textposition="top center",
+            text=[f"Годовой ВНФ=49; Qн={target_oil:,.0f} т; КИН={target_kin:.2f}%"], textposition="top center",
             customdata=[[target_oil, target_kin]],
-            hovertemplate="ВНФ=49<br>Нак. нефть %{customdata[0]:,.0f} т<br>КИН %{customdata[1]:.2f}%<extra></extra>",
+            hovertemplate="Годовой ВНФ=49<br>Нак. нефть %{customdata[0]:,.0f} т<br>КИН %{customdata[1]:.2f}%<extra></extra>",
         ))
     else:
         fig.add_annotation(text="Для тренда нужны минимум 2 точки в выбранном периоде", xref="paper", yref="paper", x=0.5, y=0.96, showarrow=False, font=dict(color=OP_MUTED, size=11))
