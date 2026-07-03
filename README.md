@@ -27,6 +27,24 @@ The schema scripts are idempotent (`IF NOT EXISTS` / replaceable views), so reru
 
 After the schema and data are loaded, start the app with the same `DATABASE_URL` and `DATA_SOURCE=sql`; SQLAlchemy creates a connection pool to the existing database instead of creating a new database.
 
+
+### Existing local PostgreSQL database
+
+If the data already exists in a local PostgreSQL database, do not create a new database. Point `DATABASE_URL` at that database and either run the app against the canonical dashboard tables or migrate from the existing parquet-named tables once. For example, when the local database is `romashka_devon` and it contains tables named like the parquet files (`df2` and `df_ploshad_year`):
+
+```bash
+export DATABASE_URL=postgresql://localhost:5432/romashka_devon
+python -m scripts.migrate_parquet_to_sql \
+  --source sql-tables \
+  --monthly-table df2 \
+  --yearly-table df_ploshad_year \
+  --dataset-version romashka-devon-v1
+
+DATA_SOURCE=sql DATABASE_URL=$DATABASE_URL python -m app
+```
+
+The app reads the canonical SQL tables (`dashboard_metadata`, `dim_area`, `monthly_metrics`, and `area_year_metrics`). The `--source sql-tables` mode keeps the existing `df2` / `df_ploshad_year` tables intact and creates or refreshes only the app tables for the selected `dataset_version`.
+
 The logical tables are:
 
 - `dashboard_metadata(dataset_name, dataset_version, updated_at, row_count, description)`
