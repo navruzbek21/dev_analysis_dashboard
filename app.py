@@ -1268,9 +1268,9 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
             target_x = np.log(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
             target_y = target_oil
 
-        x_min = float(trend_df["x_method"].min())
-        x_max = float(trend_df["x_method"].max())
-        x_line = np.linspace(min(x_min, target_x), max(x_max, target_x), 80)
+        last_trend_point = trend_df.sort_values("year").iloc[-1]
+        x_start = float(last_trend_point["x_method"])
+        x_line = np.linspace(x_start, target_x, 80)
         y_line = predict(x_line)
         fig.add_trace(go.Scatter(
             x=x_line, y=y_line, mode="lines", name=f"Тренд {start_year}-{end_year} до ВНФ=49",

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 from app import DISPLACEMENT_TARGET_VNF, displacement_characteristic_figure
@@ -18,7 +19,7 @@ def test_asset_year_aggregate_keeps_displacement_inputs():
             "vnf_nak": [2.0, 4.0, 6.0],
             "vnf_tek": [1.0, 3.0, 5.0],
             "dobycha_nefti_cum": [50.0, 100.0, 150.0],
-            "dobycha_vody_cum": [100.0, 400.0, 900.0],
+            "dobycha_vody_cum": [999.0, 999.0, 999.0],
             "dobycha_liq_cum": [150.0, 500.0, 1050.0],
         }
     )
@@ -28,11 +29,11 @@ def test_asset_year_aggregate_keeps_displacement_inputs():
     assert {"kin", "vnf_nak", "vnf_tek", "dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"}.issubset(aggregate.columns)
     first_year = aggregate.loc[aggregate["year"] == 2020].iloc[0]
     assert first_year["kin"] == 15.0
-    assert first_year["vnf_nak"] == 3.0
     assert first_year["vnf_tek"] == 2.0
     assert first_year["dobycha_nefti_cum"] == 150.0
-    assert first_year["dobycha_vody_cum"] == 500.0
     assert first_year["dobycha_liq_cum"] == 650.0
+    assert first_year["dobycha_vody_cum"] == 500.0
+    assert first_year["vnf_nak"] == first_year["dobycha_vody_cum"] / first_year["dobycha_nefti_cum"]
 
 
 def test_displacement_characteristic_extends_trend_to_vnf_49_and_labels_target():
@@ -53,6 +54,27 @@ def test_displacement_characteristic_extends_trend_to_vnf_49_and_labels_target()
     assert target_trace.y[0] == DISPLACEMENT_TARGET_VNF
     assert "Qн=" in target_trace.text[0]
     assert "КИН=" in target_trace.text[0]
+
+
+def test_displacement_trend_line_goes_from_period_end_to_target():
+    yearly = pd.DataFrame(
+        {
+            "year": [2020, 2021, 2022, 2023],
+            "kin": [10.0, 12.0, 14.0, 16.0],
+            "vnf_nak": [10.0, 20.0, 30.0, 40.0],
+            "dobycha_nefti_cum": [1000.0, 1200.0, 1400.0, 1600.0],
+            "dobycha_vody_cum": [10000.0, 24000.0, 42000.0, 64000.0],
+            "dobycha_liq_cum": [11000.0, 25200.0, 43400.0, 65600.0],
+        }
+    )
+
+    fig = displacement_characteristic_figure(yearly, "maksimov", "Максимов", [2021, 2023])
+
+    trend_trace = next(trace for trace in fig.data if trace.name == "Тренд 2021-2023 до ВНФ=49")
+    target_trace = next(trace for trace in fig.data if trace.name == "Прогноз при ВНФ=49")
+
+    assert trend_trace.x[0] == yearly.loc[yearly["year"] == 2023, "dobycha_vody_cum"].map(np.log).iloc[0]
+    assert trend_trace.x[-1] == target_trace.x[0]
 
 
 def test_displacement_methods_use_original_formula_axes():
