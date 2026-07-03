@@ -76,6 +76,9 @@ def test_displacement_trend_line_goes_from_period_end_to_target():
     assert trend_trace.x[0] == yearly.loc[yearly["year"] == 2023, "dobycha_vody_cum"].map(np.log).iloc[0]
     assert trend_trace.x[-1] == target_trace.x[0]
 
+    assert target_trace.customdata[0][0] > yearly["dobycha_nefti_cum"].max()
+
+
 
 def test_displacement_methods_use_original_formula_axes():
     yearly = pd.DataFrame(
@@ -94,11 +97,21 @@ def test_displacement_methods_use_original_formula_axes():
     pirverdyan = displacement_characteristic_figure(yearly, "ln_vnf", "Пирвердян", [2020, 2022])
     kambarov = displacement_characteristic_figure(yearly, "kambarov", "Камбаров", [2020, 2022])
 
-    assert sazonov.layout.xaxis.title.text == "LN(накопленная добыча жидкости)"
-    assert maks.layout.xaxis.title.text == "LN(накопленная добыча воды)"
-    assert pirverdyan.layout.xaxis.title.text == "1 / √(накопленная добыча жидкости)"
-    assert kambarov.layout.xaxis.title.text == "1 / накопленная добыча жидкости"
-    assert sazonov.layout.yaxis.title.text == "Накопленная добыча нефти, т"
+    taysin = displacement_characteristic_figure(yearly, "taysin_timashov", "Тайсин-Тимашов", [2020, 2022])
+    nazarov = displacement_characteristic_figure(yearly, "nazarov_sipachev", "Назаров-Сипачев", [2020, 2022])
+    sipachev = displacement_characteristic_figure(yearly, "sipachev_posevich", "Сипачев-Посевич", [2020, 2022])
+
+    assert sazonov.layout.xaxis.title.text == "ln(Vж)"
+    assert maks.layout.xaxis.title.text == "ln(Vв)"
+    assert pirverdyan.layout.xaxis.title.text == "Vж^-0.5"
+    assert kambarov.layout.xaxis.title.text == "Vж^-1"
+    assert taysin.layout.xaxis.title.text == "Vж"
+    assert nazarov.layout.xaxis.title.text == "Vв = Vж − Vн"
+    assert sipachev.layout.xaxis.title.text == "Vж"
+    assert sazonov.layout.yaxis.title.text == "Vн"
+    assert taysin.layout.yaxis.title.text == "Vв / Vн"
+    assert nazarov.layout.yaxis.title.text == "Vж / Vн"
+    assert sipachev.layout.yaxis.title.text == "Vж / Vн"
 
 
 
@@ -125,6 +138,6 @@ def test_asset_year_aggregate_calculates_missing_cumulative_inputs_for_selected_
 
     fig = displacement_characteristic_figure(aggregate, "sazonov", "Сазонов", [2020, 2022])
 
-    assert fig.layout.xaxis.title.text == "LN(накопленная добыча жидкости)"
+    assert fig.layout.xaxis.title.text == "ln(Vж)"
 
 

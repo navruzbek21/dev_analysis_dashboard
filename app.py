@@ -1113,19 +1113,31 @@ def _displacement_prepare_axes(dd: pd.DataFrame, method: str, vnf_col: str) -> t
     if method == "ln_vnf":
         dd["x_method"] = 1 / np.sqrt(liquid)
         dd["y_method"] = oil
-        return dd, "1 / √(накопленная добыча жидкости)", "Накопленная добыча нефти, т", "oil_from_liquid_inv_sqrt"
+        return dd, "Vж^-0.5", "Vн", "oil_from_liquid_inv_sqrt"
     if method == "kambarov":
         dd["x_method"] = 1 / liquid
         dd["y_method"] = oil
-        return dd, "1 / накопленная добыча жидкости", "Накопленная добыча нефти, т", "oil_from_liquid_inv"
+        return dd, "Vж^-1", "Vн", "oil_from_liquid_inv"
     if method == "sazonov":
         dd["x_method"] = np.log(liquid)
         dd["y_method"] = oil
-        return dd, "LN(накопленная добыча жидкости)", "Накопленная добыча нефти, т", "oil_from_liquid_log"
+        return dd, "ln(Vж)", "Vн", "oil_from_liquid_log"
     if method == "maksimov":
         dd["x_method"] = np.log(water)
         dd["y_method"] = oil
-        return dd, "LN(накопленная добыча воды)", "Накопленная добыча нефти, т", "oil_from_water_log"
+        return dd, "ln(Vв)", "Vн", "oil_from_water_log"
+    if method == "taysin_timashov":
+        dd["x_method"] = liquid
+        dd["y_method"] = safe_div(water, oil)
+        return dd, "Vж", "Vв / Vн", "vnf_from_liquid"
+    if method == "nazarov_sipachev":
+        dd["x_method"] = water
+        dd["y_method"] = safe_div(liquid, oil)
+        return dd, "Vв = Vж − Vн", "Vж / Vн", "liquid_oil_ratio_from_water"
+    if method == "sipachev_posevich":
+        dd["x_method"] = liquid
+        dd["y_method"] = safe_div(liquid, oil)
+        return dd, "Vж", "Vж / Vн", "liquid_oil_ratio_from_liquid"
     dd["x_method"] = oil
     dd["y_method"] = vnf
     return dd, "Накопленная добыча нефти, т", "ВНФ накопленный", "vnf_from_oil"
@@ -1163,15 +1175,22 @@ def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: 
             return np.log(oil_value * target_vnf)
         if mode == "oil_from_liquid_inv_sqrt":
             return 1 / np.sqrt(oil_value * (1 + target_vnf))
+        if mode in {"vnf_from_liquid", "liquid_oil_ratio_from_liquid"}:
+            return oil_value * (1 + target_vnf)
+        if mode == "liquid_oil_ratio_from_water":
+            return oil_value * target_vnf
         return oil_value
 
     def residual(oil_value):
-        if mode == "vnf_from_oil":
-            return float(model_fn([oil_value])[0] - target_vnf)
-        return float(model_fn([x_from_oil(oil_value)])[0] - oil_value)
+        predicted = float(model_fn([x_from_oil(oil_value)])[0])
+        if mode in {"vnf_from_oil", "vnf_from_liquid"}:
+            return predicted - target_vnf
+        if mode in {"liquid_oil_ratio_from_water", "liquid_oil_ratio_from_liquid"}:
+            return predicted - (1 + target_vnf)
+        return predicted - oil_value
 
-    low = max(oil_min * 0.25, 1e-9)
-    high = oil_max * 1.5
+    low = max(oil_max, 1e-9)
+    high = low * 1.5
     last_high = high
     for _ in range(40):
         f_low = residual(low)
@@ -1264,6 +1283,15 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         elif target_mode == "oil_from_liquid_inv_sqrt":
             target_x = 1 / np.sqrt(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
             target_y = target_oil
+        elif target_mode == "vnf_from_liquid":
+            target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
+            target_y = DISPLACEMENT_TARGET_VNF
+        elif target_mode == "liquid_oil_ratio_from_water":
+            target_x = target_oil * DISPLACEMENT_TARGET_VNF
+            target_y = 1 + DISPLACEMENT_TARGET_VNF
+        elif target_mode == "liquid_oil_ratio_from_liquid":
+            target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
+            target_y = 1 + DISPLACEMENT_TARGET_VNF
         else:
             target_x = np.log(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
             target_y = target_oil
@@ -1348,11 +1376,14 @@ ADDITIONAL_ANALYSIS_SPECS = [spec for spec in ANALYSIS_SPECS if spec[0] not in P
 DISPLACEMENT_TARGET_VNF = 49.0
 DEFAULT_DISPLACEMENT_PERIOD = [2020, 2025]
 DISPLACEMENT_SPECS = [
-    ("disp-pirverdyan", "Характеристика вытеснения: метод Пирвердяна", "Пирвердян", "ln_vnf"),
-    ("disp-vnf", "Характеристика вытеснения: водонефтяной фактор", "ВНФ", "vnf"),
-    ("disp-kambarov", "Характеристика вытеснения: метод Камбарова", "Камбаров", "kambarov"),
     ("disp-sazonov", "Характеристика вытеснения: метод Сазонова", "Сазонов", "sazonov"),
     ("disp-maksimov", "Характеристика вытеснения: метод Максимова", "Максимов", "maksimov"),
+    ("disp-kambarov", "Характеристика вытеснения: метод Камбарова", "Камбаров", "kambarov"),
+    ("disp-taysin-timashov", "Характеристика вытеснения: метод Тайсина-Тимашова", "Тайсин-Тимашов", "taysin_timashov"),
+    ("disp-nazarov-sipachev", "Характеристика вытеснения: метод Назарова-Сипачева", "Назаров-Сипачев", "nazarov_sipachev"),
+    ("disp-pirverdyan", "Характеристика вытеснения: метод Пирвердяна", "Пирвердян", "ln_vnf"),
+    ("disp-sipachev-posevich", "Характеристика вытеснения: метод Сипачева-Посевича", "Сипачев-Посевич", "sipachev_posevich"),
+    ("disp-vnf", "Характеристика вытеснения: водонефтяной фактор", "ВНФ", "vnf"),
 ]
 
 
