@@ -9,7 +9,7 @@ from sqlalchemy import delete, insert
 from config import settings
 from db import engine
 from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, normalize_data, validate_area_ngdu_uniqueness
-from repositories.metrics_repository import area_year_metrics, dashboard_metadata, dim_area, monthly_metrics
+from repositories.metrics_repository import area_year_metrics, dashboard_metadata, dim_area, metadata, monthly_metrics
 
 
 MONTHLY_COLUMNS = [
@@ -108,17 +108,7 @@ def _prepare_dim_area(df2, dataset_version, loaded_at):
     return dim[["kod_ploshchadi", "ngdu", "mest", "dataset_version", "valid_from", "valid_to", "is_current"]]
 
 
-def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
-    if engine is None:
-        raise RuntimeError("DATABASE_URL is required for parquet-to-SQL migration")
-
-    monthly_path = Path(monthly_path)
-    yearly_path = Path(yearly_path)
-    loaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-    df2 = pd.read_parquet(monthly_path)
-    dfy = pd.read_parquet(yearly_path)
-
+def _validate_input_frames(df2, dfy):
     required_monthly = {"date", AREA_COL_MONTH, "ngdu"}
     required_yearly = {AREA_COL_YEAR, "year"}
     missing_monthly = sorted(required_monthly - set(df2.columns))
@@ -130,8 +120,16 @@ def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
     if not conflicts.empty:
         raise RuntimeError("Area to NGDU conflicts detected: " + conflicts.to_json(force_ascii=False, orient="records"))
 
+
+def migrate_dataframes(df2, dfy, dataset_version, source_description, dry_run=False):
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is required for SQL migration")
+
+    loaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    _validate_input_frames(df2, dfy)
+
     normalized_monthly, normalized_year = normalize_data(df2, dfy)
-    monthly_out = _prepare_monthly(normalized_monthly, dataset_version, loaded_at, monthly_path)
+    monthly_out = _prepare_monthly(normalized_monthly, dataset_version, loaded_at, source_description)
     yearly_out = _ensure_columns(normalized_year.copy(), YEAR_COLUMNS)
     yearly_out["dataset_version"] = dataset_version
     yearly_out["loaded_at"] = loaded_at
@@ -150,6 +148,7 @@ def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
         print(json.dumps({"dry_run": True, **report}, ensure_ascii=False, indent=2))
         return report
 
+    metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(delete(monthly_metrics).where(monthly_metrics.c.dataset_version == dataset_version))
         connection.execute(delete(area_year_metrics).where(area_year_metrics.c.dataset_version == dataset_version))
@@ -165,7 +164,7 @@ def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
                 dataset_version=dataset_version,
                 updated_at=loaded_at,
                 row_count=len(yearly_out),
-                description=f"Loaded from {monthly_path.name} and {yearly_path.name}",
+                description=f"Loaded from {source_description}",
             )
         )
 
@@ -173,14 +172,43 @@ def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
     return report
 
 
+def migrate(monthly_path, yearly_path, dataset_version, dry_run=False):
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is required for parquet-to-SQL migration")
+
+    monthly_path = Path(monthly_path)
+    yearly_path = Path(yearly_path)
+    df2 = pd.read_parquet(monthly_path)
+    dfy = pd.read_parquet(yearly_path)
+    source_description = f"{monthly_path.name} and {yearly_path.name}"
+    return migrate_dataframes(df2, dfy, dataset_version, source_description, dry_run=dry_run)
+
+
+def migrate_sql_tables(monthly_table, yearly_table, dataset_version, dry_run=False):
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is required for SQL table migration")
+
+    with engine.connect() as connection:
+        df2 = pd.read_sql_table(monthly_table, connection)
+        dfy = pd.read_sql_table(yearly_table, connection)
+    source_description = f"SQL tables {monthly_table} and {yearly_table}"
+    return migrate_dataframes(df2, dfy, dataset_version, source_description, dry_run=dry_run)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Migrate Tatneft parquet files to SQL tables.")
+    parser = argparse.ArgumentParser(description="Migrate Tatneft parquet files or existing SQL tables to app SQL tables.")
     parser.add_argument("--monthly", default=settings.parquet_monthly_path)
     parser.add_argument("--yearly", default=settings.parquet_yearly_path)
+    parser.add_argument("--monthly-table", default="df2")
+    parser.add_argument("--yearly-table", default="df_ploshad_year")
+    parser.add_argument("--source", choices={"parquet", "sql-tables"}, default="parquet")
     parser.add_argument("--dataset-version", required=True)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    migrate(args.monthly, args.yearly, args.dataset_version, dry_run=args.dry_run)
+    if args.source == "sql-tables":
+        migrate_sql_tables(args.monthly_table, args.yearly_table, args.dataset_version, dry_run=args.dry_run)
+    else:
+        migrate(args.monthly, args.yearly, args.dataset_version, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
