@@ -79,6 +79,7 @@ def test_displacement_methods_use_original_formula_axes():
     assert sazonov.layout.yaxis.title.text == "Накопленная добыча нефти, т"
 
 
+
 def test_asset_year_aggregate_calculates_missing_cumulative_inputs_for_selected_area():
     source = pd.DataFrame(
         {
@@ -103,3 +104,5 @@ def test_asset_year_aggregate_calculates_missing_cumulative_inputs_for_selected_
     fig = displacement_characteristic_figure(aggregate, "sazonov", "Сазонов", [2020, 2022])
 
     assert fig.layout.xaxis.title.text == "LN(накопленная добыча жидкости)"
+
+
