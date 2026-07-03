@@ -1176,17 +1176,19 @@ def _annual_vnf_for_displacement_x(x_value: float, a: float, b: float, mode: str
         return np.nan
     if mode == "vnf_from_oil":
         return float(2 * a * x_value + b)
+    y_value = a * x_value + b
     if mode == "oil_from_liquid_log":
         liquid = np.exp(x_value)
-        return float(liquid / a - 1) if a != 0 else np.nan
+        return float(liquid / y_value - 1) if y_value > 0 else np.nan
     if mode == "oil_from_water_log":
         water = np.exp(x_value)
-        return float(water / a) if a != 0 else np.nan
+        return float(water / y_value) if y_value > 0 else np.nan
     if mode == "oil_from_liquid_inv":
-        return float(-1 / (a * x_value**2) - 1) if a != 0 and x_value != 0 else np.nan
+        liquid = 1 / x_value if x_value != 0 else np.nan
+        return float(liquid / y_value - 1) if y_value > 0 else np.nan
     if mode == "oil_from_liquid_inv_sqrt":
-        return float(-2 / (a * x_value**3) - 1) if a != 0 and x_value != 0 else np.nan
-    y_value = a * x_value + b
+        liquid = 1 / (x_value**2) if x_value != 0 else np.nan
+        return float(liquid / y_value - 1) if y_value > 0 else np.nan
     if mode == "vnf_from_liquid":
         ratio = y_value
         denominator = 1 + ratio
@@ -1245,20 +1247,6 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
         return np.nan
     if mode == "vnf_from_oil":
         return float((target_vnf - b) / (2 * a))
-    if mode == "oil_from_liquid_log":
-        target_liquid = a * (target_vnf + 1)
-        return float(np.log(target_liquid)) if target_liquid > 0 else np.nan
-    if mode == "oil_from_water_log":
-        target_water = a * target_vnf
-        return float(np.log(target_water)) if target_water > 0 else np.nan
-    if mode == "oil_from_liquid_inv":
-        denominator = a * (target_vnf + 1)
-        target_sq = -1 / denominator if denominator != 0 else np.nan
-        return float(np.sqrt(target_sq)) if target_sq > 0 else np.nan
-    if mode == "oil_from_liquid_inv_sqrt":
-        denominator = a * (target_vnf + 1)
-        target_cube = -2 / denominator if denominator != 0 else np.nan
-        return float(np.cbrt(target_cube)) if target_cube > 0 else np.nan
 
     ordered = trend_df.sort_values("year")
     x_start = float(ordered["x_method"].iloc[-1])
@@ -1280,6 +1268,25 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
     f_high = f_low
     for _ in range(80):
         high = high + direction * step
+        f_high = residual(high)
+        if np.isfinite(f_low) and np.isfinite(f_high) and f_low * f_high <= 0:
+            left, right = (low, high) if low <= high else (high, low)
+            f_left = residual(left)
+            for _ in range(80):
+                mid = (left + right) / 2
+                f_mid = residual(mid)
+                if not np.isfinite(f_mid):
+                    break
+                if abs(f_mid) < 1e-6:
+                    return float(mid)
+                if f_left * f_mid <= 0:
+                    right = mid
+                else:
+                    left = mid
+                    f_left = f_mid
+            return float((left + right) / 2)
+        step *= 1.4
+    return np.nan
 
 def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
     if not np.isfinite(oil_min) or oil_min <= 0:
@@ -1310,9 +1317,9 @@ def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: 
             return predicted - (1 + target_vnf)
         return predicted - oil_value
 
+    step = max(abs(oil_max) * 0.5, 1.0)
     low = max(oil_max, 1e-9)
     high = low * 1.5
-    last_high = high
     for _ in range(40):
         f_low = residual(low)
 
@@ -1334,6 +1341,7 @@ def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: 
                     f_left = f_mid
             return float((left + right) / 2)
         step *= 1.4
+        high = high + step
     return float(high) if np.isfinite(f_high) else np.nan
 
 
@@ -1389,8 +1397,7 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
 
     if len(trend_df) >= 2:
         trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
-
-        trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
+        predict = lambda x_values: trend_a * np.asarray(x_values, dtype=float) + trend_b
         last_trend_point = trend_df.sort_values("year").iloc[-1]
         x_start = float(last_trend_point["x_method"])
         target_x = _solve_target_x_for_annual_vnf(trend_df, DISPLACEMENT_TARGET_VNF, target_mode)
