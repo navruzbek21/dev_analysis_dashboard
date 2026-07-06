@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -165,6 +168,7 @@ CHANGE_PERIODS = {
 }
 
 DEFAULT_MAIN_METRIC = "dobycha_nefti" if "dobycha_nefti" in YEAR_METRICS else next(iter(YEAR_METRICS))
+AREA_CONTOUR_EXTENSIONS = {".asc", ".dat", ".txt", ".irap", ".xyz", ".csv"}
 
 ALL_MEST_VALUE = "__ALL_MEST__"
 ALL_NGDU_VALUE = "__ALL_NGDU__"
@@ -231,6 +235,11 @@ def format_visible_pct_label(value) -> str:
     if value is None or pd.isna(value):
         return ""
     return f"{float(value):+.1f}%"
+
+
+def _normalize_area_name(value) -> str:
+    text = "" if value is None else str(value)
+    return re.sub(r"[^0-9a-zа-яё]+", "", text.casefold())
 
 
 def _safe_initial_options(loader, label):
@@ -477,6 +486,153 @@ def crossplot_debit_wc(d):
     )
     fig.update_layout()
     return apply_theme(fig)
+
+
+def _read_irap_classic_ascii_contour(path: Path) -> pd.DataFrame:
+    """Читает контур площади из IRAP classic ASCII с тремя числовыми колонками X/Y/Z."""
+    rows = []
+    with path.open("r", encoding="utf-8", errors="ignore") as file:
+        for line in file:
+            parts = line.replace(",", " ").split()
+            if len(parts) < 3:
+                continue
+            try:
+                x, y, z = (float(parts[0]), float(parts[1]), float(parts[2]))
+            except ValueError:
+                continue
+            if np.isfinite(x) and np.isfinite(y):
+                rows.append((x, y, z))
+    return pd.DataFrame(rows, columns=["x", "y", "z"])
+
+
+@lru_cache(maxsize=1)
+def _load_area_contours() -> dict[str, dict]:
+    contour_dir = Path(settings.area_contours_dir)
+    if not contour_dir.is_absolute():
+        contour_dir = Path(__file__).resolve().parent / contour_dir
+    if not contour_dir.exists():
+        logger.info("Area contours directory does not exist: %s", contour_dir)
+        return {}
+
+    contours = {}
+    for path in sorted(p for p in contour_dir.rglob("*") if p.is_file() and p.suffix.lower() in AREA_CONTOUR_EXTENSIONS):
+        points = _read_irap_classic_ascii_contour(path)
+        if len(points) < 3:
+            logger.warning("Area contour file has fewer than 3 points: %s", path)
+            continue
+        area_name = path.stem
+        contours[_normalize_area_name(area_name)] = {"area": area_name, "path": str(path), "points": points}
+    return contours
+
+
+def _latest_metric_by_area(d: pd.DataFrame, metric: str) -> pd.DataFrame:
+    if d.empty or metric not in d.columns:
+        return pd.DataFrame(columns=[AREA_COL_YEAR, "value", "year"])
+    ly = int(d["year"].max())
+    current = d[d["year"] == ly].dropna(subset=[AREA_COL_YEAR, metric]).copy()
+    if current.empty:
+        return pd.DataFrame(columns=[AREA_COL_YEAR, "value", "year"])
+    mean_metrics = {"wc", "wc_month_avg", "debit_neft", "debit_liq", "debit_vod", "priem"}
+    agg_func = "mean" if metric in mean_metrics else "sum"
+    result = current.groupby(AREA_COL_YEAR, as_index=False).agg(value=(metric, agg_func))
+    result["year"] = ly
+    return result
+
+
+def area_metric_contour_map(d: pd.DataFrame, metric: str):
+    if d.empty or metric not in d.columns:
+        return empty_fig("Нет данных для карты площадей")
+
+    contours = _load_area_contours()
+    if not contours:
+        return empty_fig(f"Нет контуров площадей. Укажите IRAP ASCII файлы в {settings.area_contours_dir}")
+
+    values = _latest_metric_by_area(d, metric)
+    if values.empty:
+        return empty_fig("Нет значений показателя для карты площадей")
+
+    values["area_key"] = values[AREA_COL_YEAR].map(_normalize_area_name)
+    value_by_key = values.set_index("area_key").to_dict("index")
+    matched_keys = [key for key in value_by_key if key in contours]
+    if not matched_keys:
+        return empty_fig("Нет совпадений между названиями площадей и файлами контуров")
+
+    metric_values = np.array([float(value_by_key[key]["value"]) for key in matched_keys], dtype=float)
+    finite_values = metric_values[np.isfinite(metric_values)]
+    if finite_values.size == 0:
+        return empty_fig("Нет числовых значений показателя для карты площадей")
+    vmin, vmax = float(np.nanmin(finite_values)), float(np.nanmax(finite_values))
+    denom = vmax - vmin
+
+    fig = go.Figure()
+    annotations = []
+    for key in matched_keys:
+        contour = contours[key]
+        points = contour["points"]
+        area_value = float(value_by_key[key]["value"])
+        norm_value = 0.5 if denom == 0 else (area_value - vmin) / denom
+        fill_color = px.colors.sample_colorscale(HEAT_SCALE, [float(np.clip(norm_value, 0, 1))])[0]
+        x = points["x"].tolist()
+        y = points["y"].tolist()
+        if x[0] != x[-1] or y[0] != y[-1]:
+            x.append(x[0])
+            y.append(y[0])
+
+        area_label = value_by_key[key][AREA_COL_YEAR]
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="lines",
+                name=str(area_label),
+                fill="toself",
+                fillcolor=fill_color,
+                line=dict(color=OP_GREEN_DEEP, width=1.4),
+                customdata=[[area_label, area_value, int(value_by_key[key]["year"])]] * len(x),
+                hovertemplate="Площадь %{customdata[0]}<br>Год %{customdata[2]}<br>"
+                + f"{YEAR_METRICS.get(metric, metric)}: "
+                + "%{customdata[1]:,.2f}<extra></extra>",
+                showlegend=False,
+            )
+        )
+        annotations.append(
+            dict(
+                x=float(points["x"].mean()),
+                y=float(points["y"].mean()),
+                text=f"{area_label}<br>{compact(area_value)}",
+                showarrow=False,
+                font=dict(size=11, color=OP_INK),
+                bgcolor="rgba(255,255,255,0.72)",
+                bordercolor="rgba(0,0,0,0.08)",
+                borderpad=3,
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(
+                colorscale=HEAT_SCALE,
+                cmin=vmin,
+                cmax=vmax,
+                color=[vmin],
+                colorbar=dict(title=YEAR_METRICS.get(metric, metric), thickness=14, len=0.78),
+                showscale=True,
+            ),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        xaxis_title="X",
+        yaxis_title="Y",
+        annotations=annotations,
+        margin=dict(l=42, r=84, t=30, b=42),
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    return apply_theme(fig, height=520)
 
 
 def tech_dynamics(d, yearly_agg=None):
@@ -1176,17 +1332,19 @@ def _annual_vnf_for_displacement_x(x_value: float, a: float, b: float, mode: str
         return np.nan
     if mode == "vnf_from_oil":
         return float(2 * a * x_value + b)
+    y_value = a * x_value + b
     if mode == "oil_from_liquid_log":
         liquid = np.exp(x_value)
-        return float(liquid / a - 1) if a != 0 else np.nan
+        return float(liquid / y_value - 1) if y_value > 0 else np.nan
     if mode == "oil_from_water_log":
         water = np.exp(x_value)
-        return float(water / a) if a != 0 else np.nan
+        return float(water / y_value) if y_value > 0 else np.nan
     if mode == "oil_from_liquid_inv":
-        return float(-1 / (a * x_value**2) - 1) if a != 0 and x_value != 0 else np.nan
+        liquid = 1 / x_value if x_value != 0 else np.nan
+        return float(liquid / y_value - 1) if y_value > 0 else np.nan
     if mode == "oil_from_liquid_inv_sqrt":
-        return float(-2 / (a * x_value**3) - 1) if a != 0 and x_value != 0 else np.nan
-    y_value = a * x_value + b
+        liquid = 1 / (x_value**2) if x_value != 0 else np.nan
+        return float(liquid / y_value - 1) if y_value > 0 else np.nan
     if mode == "vnf_from_liquid":
         ratio = y_value
         denominator = 1 + ratio
@@ -1245,20 +1403,6 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
         return np.nan
     if mode == "vnf_from_oil":
         return float((target_vnf - b) / (2 * a))
-    if mode == "oil_from_liquid_log":
-        target_liquid = a * (target_vnf + 1)
-        return float(np.log(target_liquid)) if target_liquid > 0 else np.nan
-    if mode == "oil_from_water_log":
-        target_water = a * target_vnf
-        return float(np.log(target_water)) if target_water > 0 else np.nan
-    if mode == "oil_from_liquid_inv":
-        denominator = a * (target_vnf + 1)
-        target_sq = -1 / denominator if denominator != 0 else np.nan
-        return float(np.sqrt(target_sq)) if target_sq > 0 else np.nan
-    if mode == "oil_from_liquid_inv_sqrt":
-        denominator = a * (target_vnf + 1)
-        target_cube = -2 / denominator if denominator != 0 else np.nan
-        return float(np.cbrt(target_cube)) if target_cube > 0 else np.nan
 
     ordered = trend_df.sort_values("year")
     x_start = float(ordered["x_method"].iloc[-1])
@@ -1280,6 +1424,25 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
     f_high = f_low
     for _ in range(80):
         high = high + direction * step
+        f_high = residual(high)
+        if np.isfinite(f_low) and np.isfinite(f_high) and f_low * f_high <= 0:
+            left, right = (low, high) if low <= high else (high, low)
+            f_left = residual(left)
+            for _ in range(80):
+                mid = (left + right) / 2
+                f_mid = residual(mid)
+                if not np.isfinite(f_mid):
+                    break
+                if abs(f_mid) < 1e-6:
+                    return float(mid)
+                if f_left * f_mid <= 0:
+                    right = mid
+                else:
+                    left = mid
+                    f_left = f_mid
+            return float((left + right) / 2)
+        step *= 1.4
+    return np.nan
 
 def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
     if not np.isfinite(oil_min) or oil_min <= 0:
@@ -1310,9 +1473,9 @@ def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: 
             return predicted - (1 + target_vnf)
         return predicted - oil_value
 
+    step = max(abs(oil_max) * 0.5, 1.0)
     low = max(oil_max, 1e-9)
     high = low * 1.5
-    last_high = high
     for _ in range(40):
         f_low = residual(low)
 
@@ -1334,6 +1497,7 @@ def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: 
                     f_left = f_mid
             return float((left + right) / 2)
         step *= 1.4
+        high = high + step
     return float(high) if np.isfinite(f_high) else np.nan
 
 
@@ -1389,8 +1553,7 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
 
     if len(trend_df) >= 2:
         trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
-
-        trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
+        predict = lambda x_values: trend_a * np.asarray(x_values, dtype=float) + trend_b
         last_trend_point = trend_df.sort_values("year").iloc[-1]
         x_start = float(last_trend_point["x_method"])
         target_x = _solve_target_x_for_annual_vnf(trend_df, DISPLACEMENT_TARGET_VNF, target_mode)
@@ -1642,14 +1805,22 @@ def main_tab_layout():
             main_tab_filters_layout(),
             dbc.Row(
                 [
-                    dbc.Col(graph_card("Показатель за последний год по площадям", "main-bar"), lg=6, className="mb-4"),
-                    dbc.Col(graph_card("Динамика показателя по годам", "main-line"), lg=6, className="mb-4"),
-                ]
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(graph_card("Изменение показателя", "main-change"), lg=6, className="mb-4"),
-                    dbc.Col(graph_card("Дебит нефти vs обводнённость", "main-cross"), lg=6, className="mb-4"),
+                    dbc.Col(
+                        graph_card("Карта площадей по выбранному показателю", "main-area-map", height="1140px"),
+                        lg=6,
+                        className="mb-4",
+                    ),
+                    dbc.Col(
+                        [
+                            graph_card("Изменение показателя", "main-change"),
+                            html.Div(className="mb-4"),
+                            graph_card("Динамика показателя по годам", "main-line"),
+                            html.Div(className="mb-4"),
+                            graph_card("Дебит нефти vs обводнённость", "main-cross"),
+                        ],
+                        lg=6,
+                        className="mb-4",
+                    ),
                 ]
             ),
         ]
@@ -1975,10 +2146,10 @@ def render_tab(active_tab):
 
 
 @app.callback(
-    Output("main-bar", "figure"),
     Output("main-line", "figure"),
     Output("main-change", "figure"),
     Output("main-cross", "figure"),
+    Output("main-area-map", "figure"),
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
@@ -2009,10 +2180,10 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
         (time.perf_counter() - started) * 1000,
     )
     return (
-        apply_runtime_theme(bar_last_year(d, metric), theme),
         apply_runtime_theme(line_year_metric(d, metric), theme),
         apply_runtime_theme(main_change, theme),
         apply_runtime_theme(crossplot_debit_wc(d), theme),
+        apply_runtime_theme(area_metric_contour_map(d, metric), theme),
     )
 
 
