@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import app
+
 from app import AREA_COL_YEAR, area_metric_contour_map, main_tab_layout
 
 
@@ -27,6 +28,9 @@ def test_main_tab_has_single_left_area_map_and_no_legacy_bottom_histogram():
     assert ids.count("main-area-map") == 1
     assert "main-bar" not in ids
     assert ids.index("main-area-map") < ids.index("main-change") < ids.index("main-line") < ids.index("main-cross")
+
+from app import AREA_COL_YEAR, area_metric_contour_map
+
 
 
 def test_area_metric_contour_map_fills_irap_contour_and_labels_value(tmp_path, monkeypatch):

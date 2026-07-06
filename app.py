@@ -1821,6 +1821,18 @@ def main_tab_layout():
                         lg=6,
                         className="mb-4",
                     ),
+
+
+                ]
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        graph_card("Карта площадей по выбранному показателю", "main-area-map", height="520px"),
+                        lg=12,
+                        className="mb-4",
+                    ),
+
                 ]
             ),
         ]
@@ -2146,7 +2158,9 @@ def render_tab(active_tab):
 
 
 @app.callback(
+
     Output("main-area-map", "figure"),
+    Output("main-line", "figure"),
     Output("main-change", "figure"),
     Output("main-line", "figure"),
     Output("main-cross", "figure"),
@@ -2181,8 +2195,8 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
     )
     return (
         apply_runtime_theme(area_metric_contour_map(d, metric), theme),
-        apply_runtime_theme(main_change, theme),
         apply_runtime_theme(line_year_metric(d, metric), theme),
+        apply_runtime_theme(main_change, theme),
         apply_runtime_theme(crossplot_debit_wc(d), theme),
     )
 
