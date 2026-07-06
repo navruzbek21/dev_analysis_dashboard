@@ -48,6 +48,7 @@ class Settings:
 
     parquet_monthly_path: str = os.getenv("PARQUET_MONTHLY_PATH", "df2.parquet")
     parquet_yearly_path: str = os.getenv("PARQUET_YEARLY_PATH", "df_ploshad_year.parquet")
+    area_contours_dir: str = os.getenv("AREA_CONTOURS_DIR", "area_contours")
     dataset_name: str = os.getenv("DATASET_NAME", "area_metrics")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
