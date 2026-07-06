@@ -1805,14 +1805,22 @@ def main_tab_layout():
             main_tab_filters_layout(),
             dbc.Row(
                 [
-                    dbc.Col(graph_card("Показатель за последний год по площадям", "main-bar"), lg=6, className="mb-4"),
-                    dbc.Col(graph_card("Динамика показателя по годам", "main-line"), lg=6, className="mb-4"),
-                ]
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(graph_card("Изменение показателя", "main-change"), lg=6, className="mb-4"),
-                    dbc.Col(graph_card("Дебит нефти vs обводнённость", "main-cross"), lg=6, className="mb-4"),
+                    dbc.Col(
+                        graph_card("Карта площадей по выбранному показателю", "main-area-map", height="1140px"),
+                        lg=6,
+                        className="mb-4",
+                    ),
+                    dbc.Col(
+                        [
+                            graph_card("Изменение показателя", "main-change"),
+                            html.Div(className="mb-4"),
+                            graph_card("Динамика показателя по годам", "main-line"),
+                            html.Div(className="mb-4"),
+                            graph_card("Дебит нефти vs обводнённость", "main-cross"),
+                        ],
+                        lg=6,
+                        className="mb-4",
+                    ),
                 ]
             ),
             dbc.Row(
@@ -2147,7 +2155,6 @@ def render_tab(active_tab):
 
 
 @app.callback(
-    Output("main-bar", "figure"),
     Output("main-line", "figure"),
     Output("main-change", "figure"),
     Output("main-cross", "figure"),
@@ -2182,7 +2189,6 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
         (time.perf_counter() - started) * 1000,
     )
     return (
-        apply_runtime_theme(bar_last_year(d, metric), theme),
         apply_runtime_theme(line_year_metric(d, metric), theme),
         apply_runtime_theme(main_change, theme),
         apply_runtime_theme(crossplot_debit_wc(d), theme),
