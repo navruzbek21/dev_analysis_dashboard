@@ -1821,6 +1821,8 @@ def main_tab_layout():
                         lg=6,
                         className="mb-4",
                     ),
+
+
                 ]
             ),
             dbc.Row(
@@ -1830,6 +1832,7 @@ def main_tab_layout():
                         lg=12,
                         className="mb-4",
                     ),
+
                 ]
             ),
         ]
@@ -2155,10 +2158,12 @@ def render_tab(active_tab):
 
 
 @app.callback(
+
+    Output("main-area-map", "figure"),
     Output("main-line", "figure"),
     Output("main-change", "figure"),
+    Output("main-line", "figure"),
     Output("main-cross", "figure"),
-    Output("main-area-map", "figure"),
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
@@ -2189,10 +2194,10 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
         (time.perf_counter() - started) * 1000,
     )
     return (
+        apply_runtime_theme(area_metric_contour_map(d, metric), theme),
         apply_runtime_theme(line_year_metric(d, metric), theme),
         apply_runtime_theme(main_change, theme),
         apply_runtime_theme(crossplot_debit_wc(d), theme),
-        apply_runtime_theme(area_metric_contour_map(d, metric), theme),
     )
 
 
