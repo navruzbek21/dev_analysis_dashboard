@@ -51,6 +51,7 @@ def test_displacement_characteristic_extends_trend_to_vnf_49_and_labels_target()
 
     fig = displacement_characteristic_figure(yearly, "vnf", "ВНФ", [2020, 2023])
 
+    assert fig.layout.yaxis.title.text == "Текущий ВНФ, пласт. условия"
     target_trace = next(trace for trace in fig.data if trace.name == "Прогноз при ВНФ=49")
     assert "Годовой ВНФ=49" in target_trace.text[0]
     assert "Qн=" in target_trace.text[0]
@@ -83,13 +84,15 @@ def test_displacement_trend_line_goes_from_period_end_to_target():
 
     trend_a, trend_b = _linear_coefficients(trend_trace.x, trend_trace.y)
 
-    assert trend_trace.x[0] == yearly.loc[yearly["year"] == 2023, "dobycha_vody_cum"].map(np.log).iloc[0]
+    expected_oil_reservoir = yearly.loc[yearly["year"] == 2023, "dobycha_nefti_cum"].iloc[0] / 0.862 * 1.157
+    assert trend_trace.x[0] == pytest.approx(expected_oil_reservoir)
     assert trend_trace.x[-1] == target_trace.x[0]
     assert target_trace.customdata[0][0] > yearly["dobycha_nefti_cum"].max()
-    assert _annual_vnf_for_displacement_x(target_trace.x[0], trend_a, trend_b, "oil_from_water_log") == pytest.approx(DISPLACEMENT_TARGET_VNF)
+    assert _annual_vnf_for_displacement_x(target_trace.x[0], trend_a, trend_b, "ln_water_from_oil") == pytest.approx(DISPLACEMENT_TARGET_VNF)
     assert "Годовой ВНФ=49" in target_trace.text[0]
 
-    assert trend_trace.x[0] == yearly.loc[yearly["year"] == 2023, "dobycha_vody_cum"].map(np.log).iloc[0]
+    expected_oil_reservoir = yearly.loc[yearly["year"] == 2023, "dobycha_nefti_cum"].iloc[0] / 0.862 * 1.157
+    assert trend_trace.x[0] == pytest.approx(expected_oil_reservoir)
     assert trend_trace.x[-1] == target_trace.x[0]
 
     assert target_trace.customdata[0][0] > yearly["dobycha_nefti_cum"].max()
@@ -118,19 +121,72 @@ def test_displacement_methods_use_original_formula_axes():
     nazarov = displacement_characteristic_figure(yearly, "nazarov_sipachev", "Назаров-Сипачев", [2020, 2022])
     sipachev = displacement_characteristic_figure(yearly, "sipachev_posevich", "Сипачев-Посевич", [2020, 2022])
 
-    assert sazonov.layout.xaxis.title.text == "ln(Vж)"
-    assert maks.layout.xaxis.title.text == "ln(Vв)"
-    assert pirverdyan.layout.xaxis.title.text == "Vж^-0.5"
-    assert kambarov.layout.xaxis.title.text == "Vж^-1"
-    assert taysin.layout.xaxis.title.text == "Vж"
-    assert nazarov.layout.xaxis.title.text == "Vв = Vж − Vн"
-    assert sipachev.layout.xaxis.title.text == "Vж"
-    assert sazonov.layout.yaxis.title.text == "Vн"
+    assert sazonov.layout.xaxis.title.text == "Vн, пласт. м³"
+    assert sazonov.layout.yaxis.title.text == "LN(Vж)"
+    assert maks.layout.xaxis.title.text == "Vн, пласт. м³"
+    assert maks.layout.yaxis.title.text == "LN(Vв)"
+    assert pirverdyan.layout.xaxis.title.text == "Vж^-0.5, пласт. м³"
+    assert kambarov.layout.xaxis.title.text == "Vж^-1, пласт. м³"
+    assert taysin.layout.xaxis.title.text == "Vж, пласт. м³"
+    assert nazarov.layout.xaxis.title.text == "Vв = Vж − Vн, пласт. м³"
+    assert sipachev.layout.xaxis.title.text == "Vж, пласт. м³"
     assert taysin.layout.yaxis.title.text == "Vв / Vн"
     assert nazarov.layout.yaxis.title.text == "Vж / Vн"
     assert sipachev.layout.yaxis.title.text == "Vж / Vн"
 
 
+
+
+def test_displacement_uses_m3_inputs_and_formation_volume_coefficients():
+    yearly = pd.DataFrame(
+        {
+            "year": [2020, 2021],
+            "kin": [10.0, 12.0],
+            "vnf_nak": [1.0, 1.5],
+            "dobycha_nefti": [86.2, 86.2],
+            "dobycha_vody": [118.5, 237.0],
+            "dobycha_nefti_cum": [9999.0, 9999.0],
+            "dobycha_vody_cum": [9999.0, 9999.0],
+            "dobycha_liq_cum": [9999.0, 9999.0],
+            "dobycha_nefti_cum_m3": [100.0, 200.0],
+            "dobycha_vody_cum_m3": [100.0, 300.0],
+            "dobycha_liq_cum_m3": [200.0, 500.0],
+        }
+    )
+
+    fig = displacement_characteristic_figure(yearly, "sazonov", "Сазонов", [2020, 2021])
+    fact_trace = next(trace for trace in fig.data if trace.name == "Факт")
+
+    assert fact_trace.x[0] == pytest.approx(100.0 * 1.157)
+    assert fact_trace.y[0] == pytest.approx(np.log(100.0 * 1.157 + 100.0))
+
+
+def test_vnf_method_uses_current_reservoir_vnf_on_y_axis():
+    yearly = pd.DataFrame(
+        {
+            "year": [2020, 2021],
+            "kin": [10.0, 12.0],
+            "vnf_nak": [100.0, 100.0],
+            "dobycha_nefti": [86.2, 86.2],
+            "dobycha_vody": [118.5, 237.0],
+            "dobycha_nefti_m3": [1000.0, 1000.0],
+            "dobycha_vody_m3": [9000.0, 9000.0],
+            "dobycha_nefti_cum": [86.2, 172.4],
+            "dobycha_vody_cum": [118.5, 355.5],
+            "dobycha_liq_cum": [204.7, 527.9],
+            "dobycha_nefti_cum_m3": [1000.0, 2000.0],
+            "dobycha_vody_cum_m3": [9000.0, 18000.0],
+            "dobycha_liq_cum_m3": [10000.0, 20000.0],
+        }
+    )
+
+    fig = displacement_characteristic_figure(yearly, "vnf", "ВНФ", [2020, 2021])
+    fact_trace = next(trace for trace in fig.data if trace.name == "Факт")
+
+    assert fig.layout.yaxis.title.text == "Текущий ВНФ, пласт. условия"
+    assert fact_trace.x[0] == pytest.approx(1000.0 * 1.157)
+    assert fact_trace.y[0] == pytest.approx(1.0 / 1.157)
+    assert fact_trace.y[1] == pytest.approx(2.0 / 1.157)
 
 def test_asset_year_aggregate_calculates_missing_cumulative_inputs_for_selected_area():
     source = pd.DataFrame(
@@ -155,6 +211,7 @@ def test_asset_year_aggregate_calculates_missing_cumulative_inputs_for_selected_
 
     fig = displacement_characteristic_figure(aggregate, "sazonov", "Сазонов", [2020, 2022])
 
-    assert fig.layout.xaxis.title.text == "ln(Vж)"
+    assert fig.layout.xaxis.title.text == "Vн, пласт. м³"
+    assert fig.layout.yaxis.title.text == "LN(Vж)"
 
 

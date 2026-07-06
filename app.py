@@ -1260,49 +1260,101 @@ def _positive_numeric(series: pd.Series) -> pd.Series:
     return values.where(values > 0)
 
 
+def _series_or_nan(df: pd.DataFrame, column: str) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce")
+    return pd.Series(np.nan, index=df.index, dtype="float64")
+
+
+def _surface_oil_m3(df: pd.DataFrame, base_column: str) -> pd.Series:
+    direct = _series_or_nan(df, f"{base_column}_m3")
+    fallback = _series_or_nan(df, base_column) / OIL_DENSITY_T_PER_M3
+    return direct.fillna(fallback)
+
+
+def _surface_water_m3(df: pd.DataFrame, base_column: str) -> pd.Series:
+    direct = _series_or_nan(df, f"{base_column}_m3")
+    fallback = _series_or_nan(df, base_column) / WATER_DENSITY_T_PER_M3
+    return direct.fillna(fallback)
+
+
+def _surface_oil_m3_from_mass(df: pd.DataFrame, base_column: str) -> pd.Series:
+    return _series_or_nan(df, base_column) / OIL_DENSITY_T_PER_M3
+
+
+def _surface_water_m3_from_mass(df: pd.DataFrame, base_column: str) -> pd.Series:
+    return _series_or_nan(df, base_column) / WATER_DENSITY_T_PER_M3
+
+
+def _add_displacement_reservoir_volumes(dd: pd.DataFrame) -> pd.DataFrame:
+    dd = dd.copy()
+    oil_surface = _surface_oil_m3(dd, "dobycha_nefti_cum")
+    water_surface = _surface_water_m3(dd, "dobycha_vody_cum")
+    vnf_oil_current_surface = _surface_oil_m3_from_mass(dd, "dobycha_nefti")
+    vnf_water_current_surface = _surface_water_m3_from_mass(dd, "dobycha_vody")
+    vnf_oil_cum_surface = _surface_oil_m3_from_mass(dd, "dobycha_nefti_cum")
+    vnf_water_cum_surface = _surface_water_m3_from_mass(dd, "dobycha_vody_cum")
+
+    dd["oil_reservoir_cum"] = oil_surface * OIL_FORMATION_VOLUME_FACTOR
+    dd["water_reservoir_cum"] = water_surface * WATER_FORMATION_VOLUME_FACTOR
+    dd["liquid_reservoir_cum"] = dd["oil_reservoir_cum"] + dd["water_reservoir_cum"]
+    dd["vnf_oil_reservoir_current"] = vnf_oil_current_surface * OIL_FORMATION_VOLUME_FACTOR
+    dd["vnf_water_reservoir_current"] = vnf_water_current_surface * WATER_FORMATION_VOLUME_FACTOR
+    dd["vnf_oil_reservoir_cum"] = vnf_oil_cum_surface * OIL_FORMATION_VOLUME_FACTOR
+    dd["vnf_water_reservoir_cum"] = vnf_water_cum_surface * WATER_FORMATION_VOLUME_FACTOR
+    dd["vnf_oil_reservoir_current"] = dd["vnf_oil_reservoir_current"].fillna(dd["vnf_oil_reservoir_cum"].diff().fillna(dd["vnf_oil_reservoir_cum"]))
+    dd["vnf_water_reservoir_current"] = dd["vnf_water_reservoir_current"].fillna(dd["vnf_water_reservoir_cum"].diff().fillna(dd["vnf_water_reservoir_cum"]))
+    dd["vnf_current_reservoir"] = safe_div(dd["vnf_water_reservoir_current"], dd["vnf_oil_reservoir_current"])
+    dd["vnf_cum_reservoir"] = safe_div(dd["vnf_water_reservoir_cum"], dd["vnf_oil_reservoir_cum"])
+    return dd
+
+
 def _displacement_prepare_axes(dd: pd.DataFrame, method: str, vnf_col: str) -> tuple[pd.DataFrame, str, str, str]:
-    oil = _positive_numeric(dd["dobycha_nefti_cum"])
-    water = _positive_numeric(dd["dobycha_vody_cum"])
-    liquid = _positive_numeric(dd["dobycha_liq_cum"])
-    vnf = _positive_numeric(dd[vnf_col])
+    oil = _positive_numeric(dd["oil_reservoir_cum"])
+    water = _positive_numeric(dd["water_reservoir_cum"])
+    liquid = _positive_numeric(dd["liquid_reservoir_cum"])
+    current_vnf = _positive_numeric(dd["vnf_current_reservoir"])
 
     if method == "ln_vnf":
         dd["x_method"] = 1 / np.sqrt(liquid)
         dd["y_method"] = oil
-        return dd, "Vж^-0.5", "Vн", "oil_from_liquid_inv_sqrt"
+        return dd, "Vж^-0.5, пласт. м³", "Vн, пласт. м³", "oil_from_liquid_inv_sqrt"
     if method == "kambarov":
         dd["x_method"] = 1 / liquid
         dd["y_method"] = oil
-        return dd, "Vж^-1", "Vн", "oil_from_liquid_inv"
+        return dd, "Vж^-1, пласт. м³", "Vн, пласт. м³", "oil_from_liquid_inv"
     if method == "sazonov":
-        dd["x_method"] = np.log(liquid)
-        dd["y_method"] = oil
-        return dd, "ln(Vж)", "Vн", "oil_from_liquid_log"
+        dd["x_method"] = oil
+        dd["y_method"] = np.log(liquid)
+        return dd, "Vн, пласт. м³", "LN(Vж)", "ln_liquid_from_oil"
     if method == "maksimov":
-        dd["x_method"] = np.log(water)
-        dd["y_method"] = oil
-        return dd, "ln(Vв)", "Vн", "oil_from_water_log"
+        dd["x_method"] = oil
+        dd["y_method"] = np.log(water)
+        return dd, "Vн, пласт. м³", "LN(Vв)", "ln_water_from_oil"
     if method == "taysin_timashov":
         dd["x_method"] = liquid
         dd["y_method"] = safe_div(water, oil)
-        return dd, "Vж", "Vв / Vн", "vnf_from_liquid"
+        return dd, "Vж, пласт. м³", "Vв / Vн", "vnf_from_liquid"
     if method == "nazarov_sipachev":
         dd["x_method"] = water
         dd["y_method"] = safe_div(liquid, oil)
-        return dd, "Vв = Vж − Vн", "Vж / Vн", "liquid_oil_ratio_from_water"
+        return dd, "Vв = Vж − Vн, пласт. м³", "Vж / Vн", "liquid_oil_ratio_from_water"
     if method == "sipachev_posevich":
         dd["x_method"] = liquid
         dd["y_method"] = safe_div(liquid, oil)
-        return dd, "Vж", "Vж / Vн", "liquid_oil_ratio_from_liquid"
+        return dd, "Vж, пласт. м³", "Vж / Vн", "liquid_oil_ratio_from_liquid"
     dd["x_method"] = oil
-    dd["y_method"] = vnf
-    return dd, "Накопленная добыча нефти, т", "ВНФ накопленный", "vnf_from_oil"
+    dd["y_method"] = current_vnf
+    return dd, "Vн, пласт. м³", "Текущий ВНФ, пласт. условия", "current_vnf_from_oil"
 
 
 def _implied_recoverable_oil(dd: pd.DataFrame) -> float:
-    if "kin" not in dd.columns or "dobycha_nefti_cum" not in dd.columns:
+    if "kin" not in dd.columns:
         return np.nan
-    reserve = safe_div(dd["dobycha_nefti_cum"], dd["kin"] / 100)
+    oil_column = "oil_reservoir_cum" if "oil_reservoir_cum" in dd.columns else "dobycha_nefti_cum"
+    if oil_column not in dd.columns:
+        return np.nan
+    reserve = safe_div(dd[oil_column], dd["kin"] / 100)
     reserve = pd.Series(pd.to_numeric(reserve, errors="coerce")).replace([np.inf, -np.inf], np.nan).dropna()
     reserve = reserve[reserve > 0]
     if reserve.empty:
@@ -1330,9 +1382,13 @@ def _linear_coefficients(x, y) -> tuple[float, float]:
 def _annual_vnf_for_displacement_x(x_value: float, a: float, b: float, mode: str) -> float:
     if not all(np.isfinite(v) for v in [x_value, a, b]):
         return np.nan
-    if mode == "vnf_from_oil":
-        return float(2 * a * x_value + b)
+    if mode in {"vnf_from_oil", "current_vnf_from_oil"}:
+        return float(a * x_value + b)
     y_value = a * x_value + b
+    if mode == "ln_liquid_from_oil":
+        return float(a * np.exp(y_value) - 1)
+    if mode == "ln_water_from_oil":
+        return float(a * np.exp(y_value))
     if mode == "oil_from_liquid_log":
         liquid = np.exp(x_value)
         return float(liquid / y_value - 1) if y_value > 0 else np.nan
@@ -1371,9 +1427,14 @@ def _annual_vnf_for_displacement_x(x_value: float, a: float, b: float, mode: str
 
 def _oil_water_from_displacement_x(x_value: float, a: float, b: float, mode: str) -> tuple[float, float]:
     y_value = a * x_value + b
-    if mode == "vnf_from_oil":
+    if mode in {"vnf_from_oil", "current_vnf_from_oil"}:
         oil = x_value
         return float(oil), float(oil * y_value)
+    if mode == "ln_liquid_from_oil":
+        liquid = np.exp(y_value)
+        return float(x_value), float(liquid - x_value)
+    if mode == "ln_water_from_oil":
+        return float(x_value), float(np.exp(y_value))
     if mode == "oil_from_liquid_log":
         liquid = np.exp(x_value)
         return float(y_value), float(liquid - y_value)
@@ -1401,8 +1462,14 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
     a, b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
     if not np.isfinite(a) or not np.isfinite(b) or a == 0:
         return np.nan
-    if mode == "vnf_from_oil":
-        return float((target_vnf - b) / (2 * a))
+    if mode in {"vnf_from_oil", "current_vnf_from_oil"}:
+        return float((target_vnf - b) / a)
+    if mode == "ln_liquid_from_oil":
+        ratio = (target_vnf + 1) / a
+        return float((np.log(ratio) - b) / a) if ratio > 0 else np.nan
+    if mode == "ln_water_from_oil":
+        ratio = target_vnf / a
+        return float((np.log(ratio) - b) / a) if ratio > 0 else np.nan
 
     ordered = trend_df.sort_values("year")
     x_start = float(ordered["x_method"].iloc[-1])
@@ -1513,16 +1580,28 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         return empty_fig("Нет данных для характеристики вытеснения", height=460)
     vnf_col = "vnf_nak" if "vnf_nak" in yearly_agg.columns else "vnf_tek"
     required = ["year", "kin", vnf_col, "dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"]
+    optional_volume_columns = [
+        "dobycha_nefti",
+        "dobycha_vody",
+        "dobycha_nefti_m3",
+        "dobycha_vody_m3",
+        "dobycha_liq_m3",
+        "dobycha_nefti_cum_m3",
+        "dobycha_vody_cum_m3",
+        "dobycha_liq_cum_m3",
+    ]
+    available_columns = required + [col for col in optional_volume_columns if col in yearly_agg.columns]
     missing = [col for col in required if col not in yearly_agg.columns]
     if missing:
         return empty_fig(f"Нет данных: {', '.join(missing)}", height=460)
 
     start_year, end_year = normalize_period_value(period_value)
-    dd = yearly_agg[required].copy()
-    for col in required:
+    dd = yearly_agg[available_columns].copy()
+    for col in available_columns:
         dd[col] = pd.to_numeric(dd[col], errors="coerce")
     dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=required)
     dd = dd[(dd[vnf_col] > 0) & (dd["dobycha_nefti_cum"] > 0)].sort_values("year")
+    dd = _add_displacement_reservoir_volumes(dd)
     if dd.empty:
         return empty_fig("Нет точек после фильтрации", height=460)
 
@@ -1564,38 +1643,27 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
         target_oil, _target_water = _oil_water_from_displacement_x(target_x, trend_a, trend_b, target_mode)
         target_kin = _kin_from_oil(target_oil, recoverable_oil)
 
-        if target_mode == "vnf_from_oil":
+        if target_mode in {"vnf_from_oil", "current_vnf_from_oil", "ln_liquid_from_oil", "ln_water_from_oil"}:
             target_x = target_oil
-            target_y = DISPLACEMENT_TARGET_VNF
         elif target_mode == "oil_from_water_log":
             target_x = np.log(target_oil * DISPLACEMENT_TARGET_VNF)
-            target_y = target_oil
         elif target_mode == "oil_from_liquid_inv":
             target_x = 1 / (target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-            target_y = target_oil
         elif target_mode == "oil_from_liquid_inv_sqrt":
             target_x = 1 / np.sqrt(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-            target_y = target_oil
         elif target_mode == "vnf_from_liquid":
             target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
-            target_y = DISPLACEMENT_TARGET_VNF
         elif target_mode == "liquid_oil_ratio_from_water":
             target_x = target_oil * DISPLACEMENT_TARGET_VNF
-            target_y = 1 + DISPLACEMENT_TARGET_VNF
         elif target_mode == "liquid_oil_ratio_from_liquid":
             target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
-            target_y = 1 + DISPLACEMENT_TARGET_VNF
-        else:
-            target_x = np.log(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-            target_y = target_oil
+        target_y = float(predict([target_x])[0])
 
         last_trend_point = trend_df.sort_values("year").iloc[-1]
         x_start = float(last_trend_point["x_method"])
 
-        x_line = np.linspace(x_start, target_x, 80)
+        x_line = np.array([x_start, target_x], dtype=float)
         y_line = predict(x_line)
-        x_line[-1] = target_x
-        y_line[-1] = target_y
         fig.add_trace(go.Scatter(
             x=x_line, y=y_line, mode="lines", name=f"Тренд {start_year}-{end_year} до ВНФ=49",
             line=dict(color=OP_RED, width=2.4, dash="dash"),
@@ -1670,6 +1738,10 @@ PRIMARY_ASSET_SPEC_IDS = {"g16", "g20"}
 ADDITIONAL_ANALYSIS_SPECS = [spec for spec in ANALYSIS_SPECS if spec[0] not in PRIMARY_ASSET_SPEC_IDS]
 
 DISPLACEMENT_TARGET_VNF = 49.0
+OIL_DENSITY_T_PER_M3 = 0.862
+WATER_DENSITY_T_PER_M3 = 1.185
+OIL_FORMATION_VOLUME_FACTOR = 1.157
+WATER_FORMATION_VOLUME_FACTOR = 1.0
 DEFAULT_DISPLACEMENT_PERIOD = [2020, 2025]
 DISPLACEMENT_SPECS = [
     ("disp-sazonov", "Характеристика вытеснения: метод Сазонова", "Сазонов", "sazonov"),
@@ -1822,16 +1894,6 @@ def main_tab_layout():
                         className="mb-4",
                     ),
 
-
-                ]
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(
-                        graph_card("Карта площадей по выбранному показателю", "main-area-map", height="520px"),
-                        lg=12,
-                        className="mb-4",
-                    ),
 
                 ]
             ),
@@ -2160,7 +2222,6 @@ def render_tab(active_tab):
 @app.callback(
 
     Output("main-area-map", "figure"),
-    Output("main-line", "figure"),
     Output("main-change", "figure"),
     Output("main-line", "figure"),
     Output("main-cross", "figure"),
@@ -2195,8 +2256,8 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
     )
     return (
         apply_runtime_theme(area_metric_contour_map(d, metric), theme),
-        apply_runtime_theme(line_year_metric(d, metric), theme),
         apply_runtime_theme(main_change, theme),
+        apply_runtime_theme(line_year_metric(d, metric), theme),
         apply_runtime_theme(crossplot_debit_wc(d), theme),
     )
 
