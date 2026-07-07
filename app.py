@@ -21,7 +21,6 @@ import dash_bootstrap_components as dbc
 
 from cache_backend import check_redis_connection
 from config import settings
-from db import check_database_connection
 from filter_utils import normalize_filter_values
 from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, safe_div
 from services import aggregation_service, data_service, figure_service, periods_service
@@ -1982,17 +1981,17 @@ def health():
 
 @server.route("/ready")
 def ready():
-    db_ok = True if settings.is_parquet else check_database_connection()
+    parquet_ok = True
     redis_ok = check_redis_connection()
     try:
         dataset_version = data_service.get_dataset_version_cached()
     except Exception:
         logger.exception("Dataset version readiness check failed")
         dataset_version = None
-    status_code = 200 if db_ok and dataset_version else 503
+    status_code = 200 if parquet_ok and dataset_version else 503
     return {
         "status": "ready" if status_code == 200 else "not_ready",
-        "database": db_ok,
+        "parquet": parquet_ok,
         "redis": redis_ok,
         "dataset_version": dataset_version,
     }, status_code
