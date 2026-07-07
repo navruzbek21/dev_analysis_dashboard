@@ -1,3 +1,16 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.venv/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.parquet
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.sqlite
+*.db
+*.log

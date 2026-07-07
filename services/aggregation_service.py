@@ -11,88 +11,80 @@ from services import data_service
 logger = logging.getLogger(__name__)
 
 
+def _weighted_mean(group, value_col, weight_col):
+    values = group[value_col] if value_col in group else None
+    weights = group[weight_col] if weight_col in group else None
+    if values is None or weights is None:
+        return np.nan
+    mask = values.notna() & weights.notna() & weights.gt(0)
+    if not mask.any():
+        return values.mean(skipna=True)
+    return float(np.average(values[mask], weights=weights[mask]))
+
+
+def _ratio_from_sums(grouped, numerator, denominator, multiplier=1.0):
+    if numerator not in grouped.columns or denominator not in grouped.columns:
+        return np.nan
+    return multiplier * safe_div(grouped[numerator], grouped[denominator])
+
+
 def compute_asset_year_aggregate(d):
     if d.empty:
         return d.copy()
 
-    agg_spec = dict(
-        dobycha_liq=("dobycha_liq", "sum"),
-        dobycha_nefti=("dobycha_nefti", "sum"),
-        zakachka=("zakachka", "sum"),
-        dob_fond=("dob_fond", "sum"),
-        nagn_fond=("nagn_fond", "sum"),
-    )
-    if "dobycha_vody" in d.columns:
-        agg_spec["dobycha_vody"] = ("dobycha_vody", "sum")
-    for col in ["dobycha_nefti_m3", "dobycha_liq_m3", "dobycha_vody_m3"]:
-        if col in d.columns:
-            agg_spec[col] = (col, "sum")
-    for col in ["kin", "vnf_tek"]:
+    sum_cols = [
+        "dobycha_liq", "dobycha_nefti", "dobycha_vody", "zakachka", "dob_fond", "nagn_fond",
+        "gz", "niz", "dobycha_nefti_cum", "dobycha_liq_cum", "dobycha_vody_cum",
+        "dobycha_nefti_m3", "dobycha_liq_m3", "dobycha_vody_m3", "dobycha_nefti_cum_m3",
+        "dobycha_liq_cum_m3", "dobycha_vody_cum_m3", "priemistost", "niz_otbor",
+    ]
+    agg_spec = {col: (col, "sum") for col in sum_cols if col in d.columns}
+    for col in ["debit_neft", "debit_liq"]:
         if col in d.columns:
             agg_spec[col] = (col, "mean")
-    for col in [
-        "dobycha_nefti_cum",
-        "dobycha_liq_cum",
-        "dobycha_nefti_cum_m3",
-        "dobycha_liq_cum_m3",
-        "dobycha_vody_cum_m3",
-    ]:
-        if col in d.columns:
-            agg_spec[col] = (col, "sum")
-    if "wc" in d.columns:
-        agg_spec["wc"] = ("wc", "mean")
-    elif "wc_month_avg" in d.columns:
-        agg_spec["wc"] = ("wc_month_avg", "mean")
-
     aggregate = d.groupby("year", as_index=False).agg(**agg_spec).sort_values("year")
 
-    cumulative_sources = {
-        "dobycha_nefti_cum": "dobycha_nefti",
-        "dobycha_liq_cum": "dobycha_liq",
-        "dobycha_nefti_cum_m3": "dobycha_nefti_m3",
-        "dobycha_liq_cum_m3": "dobycha_liq_m3",
-    }
+    if "dobycha_vody" not in aggregate.columns and {"dobycha_liq", "dobycha_nefti"}.issubset(aggregate.columns):
+        aggregate["dobycha_vody"] = aggregate["dobycha_liq"] - aggregate["dobycha_nefti"]
+    if {"dobycha_vody", "dobycha_liq"}.issubset(aggregate.columns):
+        aggregate["wc"] = _ratio_from_sums(aggregate, "dobycha_vody", "dobycha_liq", 100.0)
+    elif "wc" in d.columns:
+        aggregate = aggregate.merge(d.groupby("year", as_index=False).agg(wc=("wc", "mean")), on="year", how="left")
+    elif "wc_month_avg" in d.columns:
+        aggregate = aggregate.merge(d.groupby("year", as_index=False).agg(wc=("wc_month_avg", "mean")), on="year", how="left")
+    else:
+        aggregate["wc"] = np.nan
+
+    if {"dobycha_vody", "dobycha_nefti"}.issubset(aggregate.columns):
+        aggregate["vnf_tek"] = _ratio_from_sums(aggregate, "dobycha_vody", "dobycha_nefti")
+    cumulative_sources = {"dobycha_nefti_cum": "dobycha_nefti", "dobycha_liq_cum": "dobycha_liq", "dobycha_vody_cum": "dobycha_vody", "dobycha_nefti_cum_m3": "dobycha_nefti_m3", "dobycha_liq_cum_m3": "dobycha_liq_m3", "dobycha_vody_cum_m3": "dobycha_vody_m3"}
     for cumulative_col, annual_col in cumulative_sources.items():
         if cumulative_col not in aggregate.columns and annual_col in aggregate.columns:
             aggregate[cumulative_col] = aggregate[annual_col].cumsum()
-    if {"dobycha_liq_cum", "dobycha_nefti_cum"}.issubset(aggregate.columns):
-        aggregate["dobycha_vody_cum"] = aggregate["dobycha_liq_cum"] - aggregate["dobycha_nefti_cum"]
-        aggregate["vnf_nak"] = safe_div(aggregate["dobycha_vody_cum"], aggregate["dobycha_nefti_cum"])
-    if "dobycha_vody_cum_m3" not in aggregate.columns and {"dobycha_liq_cum_m3", "dobycha_nefti_cum_m3"}.issubset(aggregate.columns):
-        aggregate["dobycha_vody_cum_m3"] = aggregate["dobycha_liq_cum_m3"] - aggregate["dobycha_nefti_cum_m3"]
-    elif "dobycha_vody_cum" not in aggregate.columns and "dobycha_vody" in aggregate.columns:
-        aggregate["dobycha_vody_cum"] = aggregate["dobycha_vody"].cumsum()
-    if "vnf_tek" not in aggregate.columns and {"dobycha_vody", "dobycha_nefti"}.issubset(aggregate.columns):
-        aggregate["vnf_tek"] = safe_div(aggregate["dobycha_vody"], aggregate["dobycha_nefti"])
+    if {"dobycha_vody_cum", "dobycha_nefti_cum"}.issubset(aggregate.columns):
+        aggregate["vnf_nak"] = _ratio_from_sums(aggregate, "dobycha_vody_cum", "dobycha_nefti_cum")
 
-    if {"debit_neft", "debit_liq"}.issubset(d.columns):
-        debit_year = (
-            d.dropna(subset=["debit_neft", "debit_liq"])
-            .groupby("year", as_index=False)
-            .agg(debit_neft=("debit_neft", "mean"), debit_liq=("debit_liq", "mean"))
-        )
-        aggregate = aggregate.merge(debit_year, on="year", how="left")
-    else:
-        if "debit_neft" in d.columns:
-            aggregate = aggregate.merge(d.groupby("year", as_index=False).agg(debit_neft=("debit_neft", "mean")), on="year", how="left")
-        else:
-            aggregate["debit_neft"] = np.nan
-        if "debit_liq" in d.columns:
-            aggregate = aggregate.merge(d.groupby("year", as_index=False).agg(debit_liq=("debit_liq", "mean")), on="year", how="left")
-        else:
-            aggregate["debit_liq"] = np.nan
+    for col in ["kin", "kiz"]:
+        if "niz" in aggregate.columns and "dobycha_nefti_cum" in aggregate.columns:
+            aggregate[col] = _ratio_from_sums(aggregate, "dobycha_nefti_cum", "niz", 100.0)
+        elif col in d.columns:
+            wm = d.groupby("year").apply(lambda g: _weighted_mean(g, col, "niz") if "niz" in g.columns else g[col].mean()).rename(col).reset_index()
+            aggregate = aggregate.drop(columns=[col], errors="ignore").merge(wm, on="year", how="left")
 
-    aggregate["debit_liq_plot"] = np.where(
-        aggregate[["debit_neft", "debit_liq"]].notna().all(axis=1) & (aggregate["debit_liq"] < aggregate["debit_neft"]),
-        aggregate["debit_neft"],
-        aggregate["debit_liq"],
-    )
-    if "wc" not in aggregate.columns:
-        aggregate["wc"] = np.nan
-    aggregate["oil_yoy_pct"] = aggregate["dobycha_nefti"].pct_change() * 100
-    aggregate["ratio_dob_nagn"] = safe_div(aggregate["dob_fond"], aggregate["nagn_fond"])
+    if {"zakachka", "dobycha_liq"}.issubset(aggregate.columns):
+        aggregate["q_priem_q_liq"] = _ratio_from_sums(aggregate, "zakachka", "dobycha_liq")
+    if {"zakachka", "dobycha_liq_cum"}.issubset(aggregate.columns):
+        aggregate["stepen_prokachki"] = _ratio_from_sums(aggregate, "zakachka", "dobycha_liq_cum", 100.0)
+    if {"zakachka", "dobycha_vody_cum"}.issubset(aggregate.columns):
+        aggregate["stepen_promyvki"] = _ratio_from_sums(aggregate, "zakachka", "dobycha_vody_cum", 100.0)
+
+    for col in ["debit_neft", "debit_liq"]:
+        if col not in aggregate.columns:
+            aggregate[col] = np.nan
+    aggregate["debit_liq_plot"] = np.where(aggregate[["debit_neft", "debit_liq"]].notna().all(axis=1) & (aggregate["debit_liq"] < aggregate["debit_neft"]), aggregate["debit_neft"], aggregate["debit_liq"])
+    aggregate["oil_yoy_pct"] = aggregate["dobycha_nefti"].pct_change() * 100 if "dobycha_nefti" in aggregate.columns else np.nan
+    aggregate["ratio_dob_nagn"] = safe_div(aggregate["dob_fond"], aggregate["nagn_fond"]) if {"dob_fond", "nagn_fond"}.issubset(aggregate.columns) else np.nan
     return aggregate
-
 
 def get_asset_year_aggregate(selected_ngdu, selected_areas, selected_mest=()):
     selected_ngdu = data_service.normalize_filter_values(selected_ngdu)

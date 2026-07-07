@@ -282,7 +282,7 @@ def apply_efficiency_algorithm(gtm_level: pd.DataFrame, algorithm: str | None) -
     if "effective_plan" in out.columns:
         out["effective"] = out["effective_plan"]
     else:
-        out["effective"] = 0
+        out["effective"] = np.nan
     return out
 
 
@@ -567,21 +567,19 @@ def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
     for frame in [base_last3, base_fallback, after_preferred, after_fallback]:
         gtm_level = gtm_level.merge(frame, on=keys, how="left")
 
-    has_far_history = gtm_level["min_before_offset"].le(-36).fillna(False)
-    qliq_before = gtm_level["qliq_base_last3"].combine_first(gtm_level["qliq_base_fallback"]).fillna(0.0)
-    qoil_before = gtm_level["qoil_base_last3"].combine_first(gtm_level["qoil_base_fallback"]).fillna(0.0)
-    qliq_before = qliq_before.mask(has_far_history, 0.0)
-    qoil_before = qoil_before.mask(has_far_history, 0.0)
+    qliq_before = gtm_level["qliq_base_last3"].combine_first(gtm_level["qliq_base_fallback"])
+    qoil_before = gtm_level["qoil_base_last3"].combine_first(gtm_level["qoil_base_fallback"])
 
     qliq_after = gtm_level["qliq_after_1_3"].combine_first(gtm_level["qliq_after_fallback"])
     qoil_after = gtm_level["qoil_after_1_3"].combine_first(gtm_level["qoil_after_fallback"])
     gtm_level["Δqliq"] = qliq_after - qliq_before
     gtm_level["Δqoil"] = qoil_after - qoil_before
-    gtm_level["effective"] = np.where(gtm_level["Δqoil"] > 0, 1, 0)
+    gtm_level["effective"] = np.where(gtm_level["Δqoil"].isna(), np.nan, np.where(gtm_level["Δqoil"] > 0, 1.0, 0.0))
+    has_plan_sample = gtm_level["qoil_after_1_3"].notna() & gtm_level["qoil_plan"].notna()
     gtm_level["effective_plan"] = np.where(
-        gtm_level["qoil_after_1_3"].notna() & gtm_level["qoil_plan"].notna() & (gtm_level["qoil_after_1_3"] > 0.9 * gtm_level["qoil_plan"]),
-        1,
-        0,
+        has_plan_sample,
+        np.where(gtm_level["qoil_after_1_3"] > 0.9 * gtm_level["qoil_plan"], 1.0, 0.0),
+        np.nan,
     )
 
     return gtm_level[
@@ -1103,7 +1101,7 @@ def make_bad_gtm_table(gtm_level: pd.DataFrame) -> tuple[list[dict], list[dict]]
         return [], []
 
     table = (
-        gtm_level[gtm_level["effective"].ne(1)]
+        gtm_level[gtm_level["effective"].eq(0)]
         .sort_values("Δqoil")
         .assign(
             **{

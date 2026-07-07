@@ -293,12 +293,13 @@ def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
     areas = _selected_values(filters.get("areas") or filters.get("plosh"))
     mest = _selected_values(filters.get("mest") or filters.get("selected_mest"))
     gtm = gtm_analysis.filter_df(dataset.gtm_level, direction, areas or gtm_analysis.ALL, mest or gtm_analysis.ALL)
-    if gtm.empty:
+    valid_eff = gtm[gtm["effective"].notna()].copy() if "effective" in gtm.columns else pd.DataFrame()
+    if gtm.empty or valid_eff.empty:
         rows: list[dict[str, Any]] = []
-        summary = {"gtm_count": 0, "efficiency_pct": 0.0, "avg_delta_oil": 0.0, "avg_delta_liq": 0.0}
+        summary = {"gtm_count": int(gtm.shape[0]), "effective_sample": 0, "efficiency_pct": 0.0, "avg_delta_oil": 0.0, "avg_delta_liq": 0.0}
     else:
         yearly = (
-            gtm.groupby("gtm_year", dropna=False)
+            valid_eff.groupby("gtm_year", dropna=False)
             .agg(
                 gtm_count=("effective", "size"),
                 effective_count=("effective", "sum"),
@@ -313,9 +314,10 @@ def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
         rows = _clean_rows(yearly.to_dict("records"))
         summary = {
             "gtm_count": int(gtm.shape[0]),
-            "efficiency_pct": float(100 * gtm["effective"].mean()),
-            "avg_delta_oil": float(gtm["Δqoil"].mean(skipna=True)),
-            "avg_delta_liq": float(gtm["Δqliq"].mean(skipna=True)),
+            "effective_sample": int(valid_eff.shape[0]),
+            "efficiency_pct": float(100 * valid_eff["effective"].mean()),
+            "avg_delta_oil": float(valid_eff["Δqoil"].mean(skipna=True)),
+            "avg_delta_liq": float(valid_eff["Δqliq"].mean(skipna=True)),
         }
     return ToolResult(
         tool="gtm_efficiency",

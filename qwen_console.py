@@ -6,6 +6,8 @@ import ssl
 import urllib.error
 import urllib.request
 import uuid
+from collections import defaultdict, deque
+from time import monotonic
 
 from dash import html
 from flask import Response, jsonify, request
@@ -18,9 +20,44 @@ VERIFY_SSL = os.getenv("QWEN_VERIFY_SSL", "true").strip().lower() not in {"0", "
 TIMEOUT = int(os.getenv("QWEN_TIMEOUT", "120"))
 DIALOGUE_FIELD = os.getenv("QWEN_DIALOGUE_FIELD", "dialogue_uuid")
 
-# Вставьте токен сюда. Он используется только на сервере и не отдается в браузер.
-QWEN_ACCESS_TOKEN = "3da0a6a6-0820-41d3-9c49-95619eb5d7ba"
-SERVER_TOKEN = QWEN_ACCESS_TOKEN
+SERVER_TOKEN = os.getenv("QWEN_ACCESS_TOKEN", "").strip()
+CONSOLE_ENABLED = os.getenv("QWEN_CONSOLE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"} and bool(SERVER_TOKEN)
+MAX_PROMPT_CHARS = int(os.getenv("QWEN_MAX_PROMPT_CHARS", "16000"))
+RATE_LIMIT_PER_MINUTE = int(os.getenv("QWEN_RATE_LIMIT_PER_MINUTE", "30"))
+ALLOWED_MODELS = [m.strip() for m in os.getenv("QWEN_ALLOWED_MODELS", "qwen3-32b,qwen2.5-72b,qwen2.5-32b,qwen2.5-14b,qwen2.5-7b").split(",") if m.strip()]
+_RATE_BUCKETS = defaultdict(deque)
+
+
+def _same_origin_allowed():
+    sec_fetch_site = (request.headers.get("Sec-Fetch-Site") or "").lower()
+    if sec_fetch_site and sec_fetch_site not in {"same-origin", "same-site", "none"}:
+        return False
+    host_url = request.host_url.rstrip("/")
+    for header in ("Origin", "Referer"):
+        value = request.headers.get(header)
+        if value and not value.startswith(host_url):
+            return False
+    return True
+
+
+def _rate_limited():
+    if RATE_LIMIT_PER_MINUTE <= 0:
+        return False
+    key = request.remote_addr or "unknown"
+    now = monotonic()
+    bucket = _RATE_BUCKETS[key]
+    while bucket and now - bucket[0] > 60:
+        bucket.popleft()
+    if len(bucket) >= RATE_LIMIT_PER_MINUTE:
+        return True
+    bucket.append(now)
+    return False
+
+
+def _normalize_model(model):
+    if model in ALLOWED_MODELS:
+        return model
+    return ALLOWED_MODELS[0] if ALLOWED_MODELS else model
 
 
 HTML_TEMPLATE = r"""<!doctype html>
@@ -1399,19 +1436,29 @@ def render_page() -> str:
 def register_routes(server):
     @server.route("/qwen-console")
     def qwen_console_page():
+        if not CONSOLE_ENABLED:
+            return Response("Qwen-консоль отключена или токен не настроен", status=503, content_type="text/plain; charset=utf-8")
         return Response(render_page(), content_type="text/html; charset=utf-8")
 
     @server.route("/qwen-console/health")
     def qwen_console_health():
-        return jsonify({"ok": True, "upstream": UPSTREAM, "token_configured": bool(SERVER_TOKEN)})
+        return jsonify({"ok": CONSOLE_ENABLED, "enabled": CONSOLE_ENABLED, "upstream": UPSTREAM, "token_configured": bool(SERVER_TOKEN)})
 
     @server.route("/qwen-console/api", methods=["POST"])
     def qwen_console_api():
+        if not CONSOLE_ENABLED:
+            return jsonify({"error": "Qwen-консоль отключена или токен не настроен", "kind": "config"}), 503
+        if not _same_origin_allowed():
+            return jsonify({"error": "Запрос отклонен same-origin проверкой", "kind": "security"}), 403
+        if _rate_limited():
+            return jsonify({"error": "Превышен лимит запросов", "kind": "rate_limit"}), 429
         data = request.get_json(silent=True) or {}
         mode = (data.get("mode") or "chat").strip()
         token = SERVER_TOKEN.strip()
         text = data.get("text") or ""
-        model = (data.get("model") or "qwen2.5-72b").strip()
+        if len(text) > MAX_PROMPT_CHARS:
+            return jsonify({"error": "Слишком длинный запрос", "kind": "client"}), 413
+        model = _normalize_model((data.get("model") or "qwen2.5-72b").strip())
         dialogue_uuid = (data.get("dialogue_uuid") or "").strip() or None
 
         if not text:
@@ -1424,7 +1471,7 @@ def register_routes(server):
                 return jsonify({"error": str(exc), "kind": "analysis"}), 500
 
         if not token:
-            return jsonify({"error": "Токен Qwen не настроен на сервере", "kind": "config"}), 500
+            return jsonify({"error": "Токен Qwen не настроен на сервере", "kind": "config"}), 503
 
         result = forward(token, text, model, dialogue_uuid)
         return jsonify(result), 200 if not result.get("error") else 502

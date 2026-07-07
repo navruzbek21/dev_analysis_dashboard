@@ -66,6 +66,9 @@ class MigratedStaticContractTest(unittest.TestCase):
         function_names = [node.name for node in self.tree.body if isinstance(node, ast.FunctionDef)]
         self.assertEqual(function_names.count("update_asset"), 1)
         self.assertIn("render_tab", function_names)
+        self.assertIn('tab_id="tab-quality"', self.source)
+        self.assertIn('def update_quality_report', self.source)
+        self.assertIn('data_quality_service.get_quality_report', self.source)
 
     def test_visible_bar_labels_are_preformatted_in_trace_text(self):
         self.assertIn("def format_visible_pct_label", self.source)

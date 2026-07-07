@@ -1,6 +1,14 @@
 import os
 from dataclasses import dataclass
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
 
 CODE_CACHE_VERSION = os.getenv("CODE_CACHE_VERSION", "dashboard-cache-v1")
 
@@ -70,11 +78,15 @@ class Settings:
         scheme = scheme_and_auth.split("://", 1)[0] if "://" in scheme_and_auth else "db"
         return f"{scheme}://***:***@{host}"
 
-    def validate(self):
+    def validate(self, require_database=None):
         if self.data_source not in {"sql", "parquet"}:
             raise ValueError("DATA_SOURCE must be either 'sql' or 'parquet'")
-        if self.is_sql and not self.database_url:
-            raise RuntimeError("DATABASE_URL is required when DATA_SOURCE=sql")
+        if require_database is None:
+            require_database = self.app_env.strip().lower() in {"production", "prod", "staging"}
+        if require_database and not self.database_url:
+            raise RuntimeError("DATABASE_URL is required for this environment")
+        if self.is_sql and not self.database_url and self.app_env.strip().lower() not in {"development", "dev", "local", "test"}:
+            raise RuntimeError("DATABASE_URL is required when DATA_SOURCE=sql outside development")
 
 
 settings = Settings()

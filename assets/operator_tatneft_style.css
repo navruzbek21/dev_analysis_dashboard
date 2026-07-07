@@ -532,3 +532,10 @@ body {
   .brand-title { font-size: 1rem; }
   .dash-chart { min-height: 320px; }
 }
+
+.quality-table-wrap { width: 100%; overflow-x: auto; }
+.quality-table { width: 100%; border-collapse: collapse; background: var(--op-card, #fff); }
+.quality-table th { color: var(--op-green, #008E5B); font-weight: 800; border-bottom: 1px solid var(--op-border, #DDE7E1); padding: .65rem .75rem; white-space: nowrap; }
+.quality-table td { border-bottom: 1px solid var(--op-border, #DDE7E1); padding: .55rem .75rem; vertical-align: top; }
+.theme-dark .quality-table { background: #17211D; }
+.theme-dark .quality-table th, .theme-dark .quality-table td { border-color: #314138; }

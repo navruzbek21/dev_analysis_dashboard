@@ -24,12 +24,13 @@ from config import settings
 from db import check_database_connection
 from filter_utils import normalize_filter_values
 from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, safe_div
-from services import aggregation_service, data_service, figure_service, periods_service
+from services import aggregation_service, data_quality_service, data_service, figure_service, periods_service
 import gtm_analysis
 import qwen_console
 
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+settings.validate()
 logger = logging.getLogger(__name__)
 
 WELL_COL = "well_uid"
@@ -905,127 +906,9 @@ def niz_otbor_vs_wc_identity(d):
     return apply_theme(fig, height=440, compact=True)
 
 def compute_wc_kiz_periods(d, n_periods=6, min_size=5):
-    """Возвращает данные с периодами разработки, рассчитанными по зависимости wc = a + b * kiz.
-
-    Периоды считаются один раз и могут использоваться в разных карточках:
-    - g16: Обводнённость от КИЗ;
-    - g20: Доб/наг от Qприем/Qжидк, окраска точек по тем же периодам.
-    """
-    required = ["year", "kiz", "wc"]
-    miss = [c for c in required if c not in d.columns]
-    if d.empty or miss:
-        return pd.DataFrame(), [], miss
-
-    keep_cols = ["year", "kiz", "wc", AREA_COL_YEAR]
-    if "ngdu" in d.columns:
-        keep_cols.append("ngdu")
-
-    df_seg = d[keep_cols].copy()
-    df_seg["__src_index"] = d.index
-    df_seg = df_seg.dropna(subset=["year", "kiz", "wc"]).copy()
-    if df_seg.empty:
-        return pd.DataFrame(), [], []
-
-    df_seg["year"] = pd.to_numeric(df_seg["year"], errors="coerce")
-    df_seg["kiz"] = pd.to_numeric(df_seg["kiz"], errors="coerce")
-    df_seg["wc"] = pd.to_numeric(df_seg["wc"], errors="coerce")
-    df_seg = (
-        df_seg
-        .dropna(subset=["year", "kiz", "wc"])
-        .sort_values(["year", AREA_COL_YEAR])
-        .reset_index(drop=True)
-    )
-    if df_seg.empty:
-        return pd.DataFrame(), [], []
-
-    def segment_sse(data, start, end):
-        """Ошибка линейной регрессии wc = a + b * kiz на участке [start, end)."""
-        part = data.iloc[start:end]
-        x = part["kiz"].to_numpy(dtype=float)
-        y = part["wc"].to_numpy(dtype=float)
-
-        if len(part) < 2:
-            return 0.0
-
-        if LinearRegression is not None:
-            model = LinearRegression()
-            model.fit(x.reshape(-1, 1), y)
-            y_pred = model.predict(x.reshape(-1, 1))
-        else:
-            # Fallback без sklearn: обычная МНК-регрессия y = a + b*x.
-            X = np.column_stack([np.ones(len(x)), x])
-            coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-            y_pred = X @ coef
-
-        return float(np.sum((y - y_pred) ** 2))
-
-    def find_best_segments(data, n_segments=6, min_size=5):
-        """Оптимальное разбиение временного ряда на n_segments периодов."""
-        n = len(data)
-        n_segments = int(max(1, min(n_segments, n // min_size))) if n >= min_size else 1
-        min_size_eff = min_size if n >= min_size else max(1, n)
-
-        if n_segments == 1:
-            return [(0, n)]
-
-        sse = np.full((n + 1, n + 1), np.inf)
-        for i in range(n):
-            for j in range(i + min_size_eff, n + 1):
-                sse[i, j] = segment_sse(data, i, j)
-
-        dp = np.full((n_segments + 1, n + 1), np.inf)
-        prev = np.full((n_segments + 1, n + 1), -1, dtype=int)
-        dp[0, 0] = 0.0
-
-        for k in range(1, n_segments + 1):
-            j_min = k * min_size_eff
-            for j in range(j_min, n + 1):
-                best_value = np.inf
-                best_i = -1
-                i_min = (k - 1) * min_size_eff
-                i_max = j - min_size_eff + 1
-                for i in range(i_min, i_max):
-                    value = dp[k - 1, i] + sse[i, j]
-                    if value < best_value:
-                        best_value = value
-                        best_i = i
-                dp[k, j] = best_value
-                prev[k, j] = best_i
-
-        if prev[n_segments, n] < 0:
-            return [(0, n)]
-
-        segments = []
-        j = n
-        for k in range(n_segments, 0, -1):
-            i = prev[k, j]
-            if i < 0:
-                return [(0, n)]
-            segments.append((i, j))
-            j = i
-
-        return segments[::-1]
-
-    segments = find_best_segments(df_seg, n_segments=n_periods, min_size=min_size)
-
-    df_seg["period_number"] = np.nan
-    for period_num, (start, end) in enumerate(segments, start=1):
-        df_seg.loc[start:end - 1, "period_number"] = period_num
-    df_seg["period_number"] = df_seg["period_number"].astype(int)
-
-    period_info = (
-        df_seg.groupby("period_number", as_index=False)
-        .agg(year_start=("year", "min"), year_end=("year", "max"))
-        .sort_values("period_number")
-    )
-    period_info["period"] = period_info.apply(
-        lambda row: f"Период {int(row['period_number'])}: {int(row['year_start'])}-{int(row['year_end'])} гг.",
-        axis=1,
-    )
-    df_seg = df_seg.merge(period_info[["period_number", "period"]], on="period_number", how="left")
-    return df_seg, segments, []
-
-
+    """Compatibility wrapper for the shared period calculation service."""
+    result = periods_service.compute_wc_kiz_periods_raw(d, n_periods=n_periods, min_size=min_size)
+    return result.data, list(result.segments), list(result.missing_columns)
 def segmented_wc_kiz(d, n_periods=6, min_size=5, period_result=None):
     """Карточка 16: Обводнённость от КИЗ с оптимальным разбиением на периоды."""
     if period_result is None:
@@ -2045,6 +1928,7 @@ app.layout = html.Div(
                         dbc.Tab(label="Основные показатели", tab_id="tab-main"),
                         dbc.Tab(label="Анализ по активу", tab_id="tab-asset"),
                         dbc.Tab(label="Анализ эффективности ГТМ", tab_id="tab-gtm"),
+                        dbc.Tab(label="Качество данных", tab_id="tab-quality"),
                         dbc.Tab(label="Консоль Qwen", tab_id="tab-qwen"),
                     ],
                 ),
@@ -2208,15 +2092,56 @@ def update_header(selected_mest, selected_ngdu, selected_areas):
     return badge, cards
 
 
+def quality_status_card(title, value, subtitle=""):
+    return html.Div([html.Div(title, className="metric-title"), html.Div(value, className="metric-value"), html.Div(subtitle, className="metric-subtitle")], className="metric-card")
+
+
+def _quality_table(rows, columns):
+    if not rows:
+        return html.Div("Замечаний нет", className="empty-state")
+    header = html.Thead(html.Tr([html.Th(col) for col in columns]))
+    body = html.Tbody([html.Tr([html.Td(row.get(col, "—")) for col in columns]) for row in rows])
+    return html.Div(html.Table([header, body], className="quality-table"), className="quality-table-wrap")
+
+
+def quality_tab_layout():
+    return html.Div([dcc.Loading(html.Div(id="quality-report"), type="circle", color=OP_GREEN)], className="tab-panel")
+
+
 @app.callback(Output("scenario-content", "children"), Input("scenario-tabs", "active_tab"))
 def render_tab(active_tab):
     if active_tab == "tab-gtm":
         return gtm_analysis.layout()
     if active_tab == "tab-qwen":
         return qwen_console.layout()
+    if active_tab == "tab-quality":
+        return quality_tab_layout()
     if active_tab == "tab-asset":
         return asset_tab_layout()
     return main_tab_layout()
+
+
+@app.callback(
+    Output("quality-report", "children"),
+    Input("mest-filter", "value"),
+    Input("ngdu-filter", "value"),
+    Input("area-filter", "value"),
+)
+def update_quality_report(selected_mest, selected_ngdu, selected_areas):
+    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
+    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
+    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
+    report = data_quality_service.get_quality_report(ngdu_key, area_key, mest_key)
+    summary = report["summary"]
+    cards = dbc.Row([
+        dbc.Col(quality_status_card("Статус", summary.get("status", "—")), lg=3, md=6, className="mb-3"),
+        dbc.Col(quality_status_card("Строк", compact(summary.get("rows", 0))), lg=3, md=6, className="mb-3"),
+        dbc.Col(quality_status_card("Площадей", compact(summary.get("areas", 0))), lg=3, md=6, className="mb-3"),
+        dbc.Col(quality_status_card("Период", summary.get("period", "—")), lg=3, md=6, className="mb-3"),
+    ])
+    issues = _quality_table(report.get("issues", []), ["severity", "check", "message", "count"])
+    null_rates = _quality_table(report.get("null_rates", []), ["column", "null_rate_pct", "null_count"])
+    return html.Div([cards, html.H4("Проблемы качества", className="section-title"), issues, html.H4("Null-rate ключевых колонок", className="section-title mt-4"), null_rates])
 
 
 @app.callback(
