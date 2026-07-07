@@ -10,6 +10,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       PARQUET_MONTHLY_PATH: df2.parquet
       PARQUET_YEARLY_PATH: df_ploshad_year.parquet
+      AREA_CONTOURS_DIR: area_contours
+      LITELLM_BASE_URL: http://litellm.tatneft.guru
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_AUTH_HEADER_NAME: ${LITELLM_AUTH_HEADER_NAME:-Authorization}
+      LITELLM_AUTH_HEADER_PREFIX: ${LITELLM_AUTH_HEADER_PREFIX:-Bearer}
+      LITELLM_DEFAULT_MODEL: ${LITELLM_DEFAULT_MODEL:-qwen2.5-72b}
+      LITELLM_ALLOWED_MODELS: ${LITELLM_ALLOWED_MODELS:-qwen3-32b,qwen2.5-72b,qwen2.5-32b,qwen2.5-14b,qwen2.5-7b}
     depends_on:
       - redis
     volumes:

@@ -70,6 +70,24 @@ Docker:
 docker compose up --build
 ```
 
+## LiteLLM console
+
+The dashboard tab formerly named Qwen now proxies chat requests to LiteLLM. By default it calls the OpenAI-compatible chat-completions endpoint under `http://litellm.tatneft.guru/v1/chat/completions`. Configure the token only through environment variables; do not hard-code it in the repository.
+
+```bash
+export LITELLM_BASE_URL=http://litellm.tatneft.guru
+export LITELLM_API_KEY="<your token>"
+# If the issued credential requires a non-standard header key, override it:
+export LITELLM_AUTH_HEADER_NAME="<header key from LiteLLM>"
+# Use an empty prefix when the header value must be exactly the token.
+export LITELLM_AUTH_HEADER_PREFIX=Bearer
+export LITELLM_DEFAULT_MODEL=qwen2.5-72b
+export LITELLM_ALLOWED_MODELS=qwen3-32b,qwen2.5-72b,qwen2.5-32b,qwen2.5-14b,qwen2.5-7b
+python -m app
+```
+
+If Swagger shows a fully qualified chat endpoint different from `/v1/chat/completions`, set `LITELLM_CHAT_COMPLETIONS_URL` explicitly. The console health endpoint `/qwen-console/health` reports the active upstream URL and whether a server-side token is configured.
+
 ## Health checks
 
 - `/health` returns the application status and `data_source: parquet`.

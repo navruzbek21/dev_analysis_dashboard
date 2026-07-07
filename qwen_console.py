@@ -5,7 +5,6 @@ import os
 import ssl
 import urllib.error
 import urllib.request
-import uuid
 
 from dash import html
 from flask import Response, jsonify, request
@@ -13,14 +12,19 @@ from flask import Response, jsonify, request
 import analytics_tools
 
 
-UPSTREAM = os.getenv("QWEN_UPSTREAM", "https://tatneft.guru/api/http")
-VERIFY_SSL = os.getenv("QWEN_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no"}
-TIMEOUT = int(os.getenv("QWEN_TIMEOUT", "120"))
-DIALOGUE_FIELD = os.getenv("QWEN_DIALOGUE_FIELD", "dialogue_uuid")
-
-# Вставьте токен сюда. Он используется только на сервере и не отдается в браузер.
-QWEN_ACCESS_TOKEN = "3da0a6a6-0820-41d3-9c49-95619eb5d7ba"
-SERVER_TOKEN = QWEN_ACCESS_TOKEN
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", os.getenv("QWEN_UPSTREAM", "http://litellm.tatneft.guru")).rstrip("/")
+UPSTREAM = os.getenv("LITELLM_CHAT_COMPLETIONS_URL", f"{LITELLM_BASE_URL}/v1/chat/completions")
+VERIFY_SSL = os.getenv("LITELLM_VERIFY_SSL", os.getenv("QWEN_VERIFY_SSL", "true")).strip().lower() not in {"0", "false", "no"}
+TIMEOUT = int(os.getenv("LITELLM_TIMEOUT", os.getenv("QWEN_TIMEOUT", "120")))
+DEFAULT_MODEL = os.getenv("LITELLM_DEFAULT_MODEL", "qwen2.5-72b")
+ALLOWED_MODELS = [
+    model.strip()
+    for model in os.getenv("LITELLM_ALLOWED_MODELS", "qwen3-32b,qwen2.5-72b,qwen2.5-32b,qwen2.5-14b,qwen2.5-7b").split(",")
+    if model.strip()
+]
+AUTH_HEADER_NAME = os.getenv("LITELLM_AUTH_HEADER_NAME", "Authorization").strip() or "Authorization"
+AUTH_HEADER_PREFIX = os.getenv("LITELLM_AUTH_HEADER_PREFIX", "Bearer").strip()
+SERVER_TOKEN = os.getenv("LITELLM_API_KEY", os.getenv("QWEN_ACCESS_TOKEN", "")).strip()
 
 
 HTML_TEMPLATE = r"""<!doctype html>
@@ -28,7 +32,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Консоль Qwen</title>
+<title>Консоль LiteLLM</title>
 <style>
 :root {
   --op-bg: #F7F8F5;
@@ -652,8 +656,8 @@ textarea {
 <div class="qwen-shell" id="qwenShell">
   <aside class="qwen-sidebar">
     <div class="qwen-brand">
-      <div class="qwen-brand-title">Консоль Qwen</div>
-      <div class="qwen-brand-subtitle">Локальный прокси внутри дашборда</div>
+      <div class="qwen-brand-title">Консоль LiteLLM</div>
+      <div class="qwen-brand-subtitle">Прокси LiteLLM внутри дашборда</div>
     </div>
     <button class="qwen-new-chat" id="newChatBtn" type="button">Новый чат</button>
     <div class="qwen-chat-list" id="chatList"></div>
@@ -661,7 +665,7 @@ textarea {
       <label class="qwen-field">
         <span class="qwen-label">Режим</span>
         <select class="qwen-control" id="workMode">
-          <option value="chat">Чат Qwen</option>
+          <option value="chat">Чат LiteLLM</option>
           <option value="analysis">Анализ данных</option>
         </select>
       </label>
@@ -698,8 +702,8 @@ textarea {
 </div>
 <script>
 const LS_KEY = "qwen_console_dashboard_v1";
-const DEFAULT_MODEL = "qwen2.5-72b";
-const MODELS = ["qwen3-32b", "qwen2.5-72b", "qwen2.5-32b", "qwen2.5-14b", "qwen2.5-7b"];
+const DEFAULT_MODEL = __DEFAULT_MODEL__;
+const MODELS = __ALLOWED_MODELS__;
 const $ = selector => document.querySelector(selector);
 
 const shell = $("#qwenShell");
@@ -878,10 +882,15 @@ function renderMarkdown(markdown) {
 function parseResult(raw) {
   let payload;
   try { payload = JSON.parse(raw); } catch (_) { return { message: (raw || "").trim() || "(пустой ответ)" }; }
+  if (payload && typeof payload === "object" && Array.isArray(payload.choices) && payload.choices.length) {
+    const choice = payload.choices[0] || {};
+    const content = choice.message && typeof choice.message.content === "string" ? choice.message.content : choice.text;
+    if (typeof content === "string" && content.trim()) return { message: content.trim() };
+  }
   const result = payload && typeof payload === "object" && payload.result && typeof payload.result === "object" ? payload.result : payload;
   if (result && typeof result === "object") {
     const error = result.error_info ?? result.error;
-    if (error) return { error: typeof error === "string" ? error : JSON.stringify(error) };
+    if (error) return { error: typeof error === "string" ? error : (error.message || JSON.stringify(error)) };
     const keys = ["message", "response", "text", "answer", "content", "output", "reply", "completion"];
     let message = "";
     for (const key of keys) {
@@ -1272,7 +1281,7 @@ def layout():
         html.Div(
             html.Iframe(
                 src="/qwen-console",
-                title="Консоль Qwen",
+                title="Консоль LiteLLM",
                 className="qwen-console-frame",
             ),
             className="qwen-console-shell panel-card",
@@ -1281,17 +1290,10 @@ def layout():
     )
 
 
-def build_multipart(fields: dict[str, str | None]) -> tuple[bytes, str]:
-    boundary = "----qwenconsole" + uuid.uuid4().hex
-    parts: list[str] = []
-    for name, value in fields.items():
-        parts.append("--" + boundary)
-        parts.append(f'Content-Disposition: form-data; name="{name}"')
-        parts.append("")
-        parts.append("" if value is None else str(value))
-    parts.append("--" + boundary + "--")
-    parts.append("")
-    return "\r\n".join(parts).encode("utf-8"), boundary
+def make_auth_header_value(token: str) -> str:
+    if not AUTH_HEADER_PREFIX:
+        return token
+    return f"{AUTH_HEADER_PREFIX} {token}"
 
 
 def make_ctx(verify: bool) -> ssl.SSLContext:
@@ -1303,15 +1305,18 @@ def make_ctx(verify: bool) -> ssl.SSLContext:
 
 
 def forward(token: str, text: str, model: str, dialogue_uuid: str | None = None) -> dict:
-    fields = {"accesstoken": token, "text": text, "lm_model_type": model}
+    messages = [{"role": "user", "content": text}]
+    payload = {"model": model, "messages": messages}
     if dialogue_uuid:
-        fields[DIALOGUE_FIELD] = dialogue_uuid
-    body, boundary = build_multipart(fields)
+        payload["user"] = dialogue_uuid
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     def attempt(verify: bool):
         req = urllib.request.Request(UPSTREAM, data=body, method="POST")
-        req.add_header("Content-Type", "multipart/form-data; boundary=" + boundary)
-        req.add_header("User-Agent", "tatneft-dashboard-qwen-console")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json")
+        req.add_header(AUTH_HEADER_NAME, make_auth_header_value(token))
+        req.add_header("User-Agent", "tatneft-dashboard-litellm-console")
         try:
             with urllib.request.urlopen(req, context=make_ctx(verify), timeout=TIMEOUT) as resp:
                 return resp.getcode(), resp.read().decode("utf-8", "replace")
@@ -1338,17 +1343,24 @@ def forward(token: str, text: str, model: str, dialogue_uuid: str | None = None)
     except Exception as exc:
         return {"error": str(exc), "kind": "network"}
 
-
-def extract_qwen_message(raw_body: str) -> str:
+def extract_litellm_message(raw_body: str) -> str:
     try:
         payload = json.loads(raw_body or "{}")
     except Exception:
         return (raw_body or "").strip()
     result = payload.get("result") if isinstance(payload, dict) else payload
+    if isinstance(payload, dict) and isinstance(payload.get("choices"), list) and payload["choices"]:
+        choice = payload["choices"][0]
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                return message["content"].strip()
+            if isinstance(choice.get("text"), str):
+                return choice["text"].strip()
     if isinstance(result, dict):
         error = result.get("error_info") or result.get("error")
         if error:
-            return str(error)
+            return error.get("message", str(error)) if isinstance(error, dict) else str(error)
         for key in ["message", "response", "text", "answer", "content", "output", "reply", "completion"]:
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -1359,7 +1371,7 @@ def extract_qwen_message(raw_body: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def qwen_prompt(prompt: str, model: str) -> str | None:
+def litellm_prompt(prompt: str, model: str) -> str | None:
     token = SERVER_TOKEN.strip()
     if not token:
         return None
@@ -1369,31 +1381,35 @@ def qwen_prompt(prompt: str, model: str) -> str | None:
     status = result.get("upstream_status")
     if status and (status < 200 or status >= 300):
         return None
-    return extract_qwen_message(result.get("body") or "")
+    return extract_litellm_message(result.get("body") or "")
 
 
 def run_analysis(text: str, model: str) -> dict:
     plan_source = "fallback"
     plan = None
-    plan_answer = qwen_prompt(analytics_tools.make_plan_prompt(text), model)
+    plan_answer = litellm_prompt(analytics_tools.make_plan_prompt(text), model)
     if plan_answer:
         plan = analytics_tools.parse_plan(plan_answer)
         if plan:
-            plan_source = "qwen"
+            plan_source = "litellm"
     if not plan:
         plan = analytics_tools.fallback_plan(text)
 
     result = analytics_tools.execute_plan(plan)
     explanation = None
     if SERVER_TOKEN.strip():
-        explanation = qwen_prompt(analytics_tools.make_explanation_prompt(text, plan, result), model)
+        explanation = litellm_prompt(analytics_tools.make_explanation_prompt(text, plan, result), model)
     if not explanation:
         explanation = analytics_tools.fallback_explanation(text, result)
     return analytics_tools.result_to_payload(result, explanation, plan, plan_source)
 
 
 def render_page() -> str:
-    return HTML_TEMPLATE
+    return (
+        HTML_TEMPLATE
+        .replace("__DEFAULT_MODEL__", json.dumps(DEFAULT_MODEL, ensure_ascii=False))
+        .replace("__ALLOWED_MODELS__", json.dumps(ALLOWED_MODELS or [DEFAULT_MODEL], ensure_ascii=False))
+    )
 
 
 def register_routes(server):
@@ -1411,7 +1427,7 @@ def register_routes(server):
         mode = (data.get("mode") or "chat").strip()
         token = SERVER_TOKEN.strip()
         text = data.get("text") or ""
-        model = (data.get("model") or "qwen2.5-72b").strip()
+        model = (data.get("model") or DEFAULT_MODEL).strip()
         dialogue_uuid = (data.get("dialogue_uuid") or "").strip() or None
 
         if not text:
@@ -1424,7 +1440,7 @@ def register_routes(server):
                 return jsonify({"error": str(exc), "kind": "analysis"}), 500
 
         if not token:
-            return jsonify({"error": "Токен Qwen не настроен на сервере", "kind": "config"}), 500
+            return jsonify({"error": "Токен LiteLLM не настроен на сервере", "kind": "config"}), 500
 
         result = forward(token, text, model, dialogue_uuid)
         return jsonify(result), 200 if not result.get("error") else 502
