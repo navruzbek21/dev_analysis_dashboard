@@ -21,12 +21,11 @@ import dash_bootstrap_components as dbc
 
 from cache_backend import check_redis_connection
 from config import settings
-from db import check_database_connection
 from filter_utils import normalize_filter_values
 from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, safe_div
 from services import aggregation_service, data_service, figure_service, periods_service
 import gtm_analysis
-import qwen_console
+import litellm_console
 
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -1971,7 +1970,7 @@ app.index_string = """
 </html>
 """
 server = app.server
-qwen_console.register_routes(server)
+litellm_console.register_routes(server)
 gtm_analysis.register_callbacks(app)
 
 
@@ -1982,17 +1981,17 @@ def health():
 
 @server.route("/ready")
 def ready():
-    db_ok = True if settings.is_parquet else check_database_connection()
+    parquet_ok = True
     redis_ok = check_redis_connection()
     try:
         dataset_version = data_service.get_dataset_version_cached()
     except Exception:
         logger.exception("Dataset version readiness check failed")
         dataset_version = None
-    status_code = 200 if db_ok and dataset_version else 503
+    status_code = 200 if parquet_ok and dataset_version else 503
     return {
         "status": "ready" if status_code == 200 else "not_ready",
-        "database": db_ok,
+        "parquet": parquet_ok,
         "redis": redis_ok,
         "dataset_version": dataset_version,
     }, status_code
@@ -2045,7 +2044,7 @@ app.layout = html.Div(
                         dbc.Tab(label="Основные показатели", tab_id="tab-main"),
                         dbc.Tab(label="Анализ по активу", tab_id="tab-asset"),
                         dbc.Tab(label="Анализ эффективности ГТМ", tab_id="tab-gtm"),
-                        dbc.Tab(label="Консоль Qwen", tab_id="tab-qwen"),
+                        dbc.Tab(label="Консоль LiteLLM", tab_id="tab-litellm"),
                     ],
                 ),
                 dcc.Loading(html.Div(id="scenario-content"), type="circle", color=OP_GREEN),
@@ -2212,8 +2211,8 @@ def update_header(selected_mest, selected_ngdu, selected_areas):
 def render_tab(active_tab):
     if active_tab == "tab-gtm":
         return gtm_analysis.layout()
-    if active_tab == "tab-qwen":
-        return qwen_console.layout()
+    if active_tab == "tab-litellm":
+        return litellm_console.layout()
     if active_tab == "tab-asset":
         return asset_tab_layout()
     return main_tab_layout()
