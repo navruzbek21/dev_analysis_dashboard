@@ -23,3 +23,21 @@ def test_plan_efficiency_uses_average_qoil_after_gtm_against_plan_threshold():
     assert gtm_level["qoil_after_1_3"].round(3).tolist() == [9.1, 8.967]
     assert gtm_level["effective_plan"].tolist() == [1, 0]
     assert apply_efficiency_algorithm(gtm_level, EFFICIENCY_PLAN)["effective"].tolist() == [1, 0]
+
+
+def test_gtm_filter_df_filters_block_when_present():
+    from gtm_analysis import filter_df
+
+    df = pd.DataFrame(
+        {
+            "направление": ["A", "A", "B"],
+            "plosh": ["p1", "p1", "p1"],
+            "mest": ["m1", "m1", "m1"],
+            "block": ["1", "2", "1"],
+            "value": [10, 20, 30],
+        }
+    )
+
+    filtered = filter_df(df, direction="A", plosh="p1", mest="m1", block="2")
+
+    assert filtered["value"].tolist() == [20]

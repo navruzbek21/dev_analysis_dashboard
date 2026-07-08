@@ -85,3 +85,29 @@ def test_area_metric_contour_map_aggregates_current_year_by_area(tmp_path, monke
     area_trace = next(trace for trace in fig.data if trace.name == "area-a")
     assert area_trace.customdata[0][1] == 25.0
     assert fig.layout.annotations[0].text == "area-a<br>25"
+
+
+def test_area_metric_contour_map_overlays_selected_area_blocks(tmp_path, monkeypatch):
+    contour_dir = tmp_path / "area_contours"
+    contour_dir.mkdir()
+    (contour_dir / "Альметьевская.txt").write_text("0 0 0\n4 0 0\n4 4 0\n0 4 0\n", encoding="utf-8")
+    (contour_dir / "Альметьевская_1.txt").write_text("0 0 0\n2 0 0\n2 4 0\n0 4 0\n", encoding="utf-8")
+    (contour_dir / "Альметьевская_2.txt").write_text("2 0 0\n4 0 0\n4 4 0\n2 4 0\n", encoding="utf-8")
+    monkeypatch.setattr(app, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
+    app._load_area_contours.cache_clear()
+
+    data = pd.DataFrame(
+        {
+            AREA_COL_YEAR: ["Альметьевская", "Альметьевская", "Альметьевская"],
+            "block": ["all", "1", "2"],
+            "year": [2026, 2026, 2026],
+            "dobycha_nefti": [100.0, 40.0, 60.0],
+        }
+    )
+
+    fig = area_metric_contour_map(data, "dobycha_nefti", ["Альметьевская"])
+
+    assert {trace.name for trace in fig.data if getattr(trace, "fill", None) == "toself"} >= {"Альметьевская", "Блок 1", "Блок 2"}
+    block_trace = next(trace for trace in fig.data if trace.name == "Блок 1")
+    assert block_trace.customdata[0][0] == "Альметьевская"
+    assert block_trace.customdata[0][3] == "1"
