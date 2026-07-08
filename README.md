@@ -208,3 +208,11 @@ PYTHONPATH=. python -m unittest discover -s tests
 1. Stop the current app.
 2. Restore the legacy entrypoint if needed: `cp legacy/app_tatneft_g17_g20_diag.py app.py`.
 3. Restore CSS if needed: `cp legacy/operator_tatneft_style.css assets/operator_tatneft_style.css`.
+
+### LiteLLM data-analysis mode and dashboard filters
+
+In `Режим → Анализ данных`, the console now sends the current dashboard filter state to the backend along with the question. The current values of `Месторождение`, `НГДУ`, and `Площадь` are stored in the browser under `dashboard-analysis-filters`; the LiteLLM iframe reads that value and includes it as `dashboard_filters` in `/litellm-console/api` requests.
+
+This matters for requests such as `проанализируй эффективность ГТМ по текущему срезу` or `эффективность ГТМ по НГДУ 30`: the backend enriches the LLM-generated plan with the active dashboard filters and also recognizes explicit `НГДУ <номер>` mentions in the text. For GTM tables, where the parquet source is keyed by area rather than directly by `ngdu`, the backend maps the selected NGDU to its available areas before running the GTM aggregation.
+
+The LLM does not receive raw parquet files directly. Instead, it selects one of the safe analytical tools and receives aggregated rows/summaries from the backend. To ask what data is available across the source parquet tables, use a request like `какие исходные таблицы доступны и сколько строк в текущем срезе?`; this uses the `dataset_overview` tool and reports full vs filtered row counts for the loaded yearly and GTM parquet datasets. To let the LLM perform arbitrary analysis over new raw tables, add a dedicated tool in `analytics_tools.py` rather than exposing unrestricted file access.

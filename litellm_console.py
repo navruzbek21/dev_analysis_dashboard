@@ -888,6 +888,19 @@ function renderMarkdown(markdown) {
   return html || "<p></p>";
 }
 
+function readDashboardFilters() {
+  try {
+    if (window.parent && window.parent !== window && window.parent.localStorage) {
+      const raw = window.parent.localStorage.getItem("dashboard-analysis-filters");
+      if (raw) return JSON.parse(raw);
+    }
+  } catch (_) {}
+  try {
+    const raw = localStorage.getItem("dashboard-analysis-filters");
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) { return {}; }
+}
+
 function parseResult(raw) {
   let payload;
   try { payload = JSON.parse(raw); } catch (_) { return { message: (raw || "").trim() || "(пустой ответ)" }; }
@@ -1199,6 +1212,7 @@ async function send() {
   const isAnalysis = state.workMode === "analysis";
   setStatus(isAnalysis ? "анализ" : "отправка", "busy");
   const payload = { mode: state.workMode, text, model, memory: state.memoryMode };
+  if (isAnalysis) payload.dashboard_filters = readDashboardFilters();
   if (!isAnalysis) payload.messages = buildMessages(chat);
   if (!isAnalysis && state.memoryMode === "server" && chat.dialogueUuid) payload.dialogue_uuid = chat.dialogueUuid;
   const started = performance.now();
@@ -1416,10 +1430,10 @@ def litellm_prompt(prompt: str, model: str) -> str | None:
     return extract_litellm_message(result.get("body") or "")
 
 
-def run_analysis(text: str, model: str) -> dict:
+def run_analysis(text: str, model: str, dashboard_filters: dict | None = None) -> dict:
     plan_source = "fallback"
     plan = None
-    plan_answer = litellm_prompt(analytics_tools.make_plan_prompt(text), model)
+    plan_answer = litellm_prompt(analytics_tools.make_plan_prompt(text, dashboard_filters), model)
     if plan_answer:
         plan = analytics_tools.parse_plan(plan_answer)
         if plan:
@@ -1427,6 +1441,7 @@ def run_analysis(text: str, model: str) -> dict:
     if not plan:
         plan = analytics_tools.fallback_plan(text)
 
+    plan = analytics_tools.apply_dashboard_context(plan, text, dashboard_filters)
     result = analytics_tools.execute_plan(plan)
     explanation = None
     if SERVER_TOKEN.strip():
@@ -1468,7 +1483,7 @@ def register_routes(server):
 
         if mode == "analysis":
             try:
-                return jsonify(run_analysis(text, model))
+                return jsonify(run_analysis(text, model, data.get("dashboard_filters")))
             except Exception as exc:
                 return jsonify({"error": str(exc), "kind": "analysis"}), 500
 

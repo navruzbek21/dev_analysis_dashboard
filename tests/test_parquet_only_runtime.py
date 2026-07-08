@@ -39,3 +39,25 @@ def test_config_forces_parquet_mode():
     assert 'data_source: str = "parquet"' in source
     assert "Only parquet data source is supported" in source
     assert "database_url" not in source
+
+
+def test_apply_dashboard_context_uses_current_dashboard_filters(monkeypatch):
+    import analytics_tools
+
+    monkeypatch.setattr(analytics_tools.data_service, "get_ngdu_options", lambda selected_mest=(): ["НГДУ 30", "НГДУ 31"])
+    plan = {"tool": "gtm_efficiency", "params": {"filters": {}}}
+
+    enriched = analytics_tools.apply_dashboard_context(plan, "эффективность ГТМ", {"mest": ["m1"], "ngdu": ["НГДУ 30"], "areas": []})
+
+    assert enriched["params"]["filters"] == {"mest": ["m1"], "ngdu": ["НГДУ 30"]}
+
+
+def test_apply_dashboard_context_infers_ngdu_from_text(monkeypatch):
+    import analytics_tools
+
+    monkeypatch.setattr(analytics_tools.data_service, "get_ngdu_options", lambda selected_mest=(): ["НГДУ 30", "НГДУ 31"])
+    plan = {"tool": "gtm_efficiency", "params": {"filters": {}}}
+
+    enriched = analytics_tools.apply_dashboard_context(plan, "эффективность ГТМ по НГДУ 30", {})
+
+    assert enriched["params"]["filters"]["ngdu"] == ["НГДУ 30"]

@@ -1999,6 +1999,7 @@ def ready():
 app.layout = html.Div(
     [
         dcc.Store(id="theme-store", storage_type="local", data="light"),
+        dcc.Store(id="dashboard-analysis-filters", storage_type="local"),
         html.Div(
             dbc.Row(
                 [
@@ -2048,6 +2049,7 @@ app.layout = html.Div(
                     ],
                 ),
                 dcc.Loading(html.Div(id="scenario-content"), type="circle", color=OP_GREEN),
+                html.Div(id="analysis-filter-sync", style={"display": "none"}),
             ],
             fluid=True,
             className="py-4 px-4",
@@ -2082,6 +2084,22 @@ def apply_app_theme(theme):
         "Светлая тема" if is_dark else "Темная тема",
         "Переключить на светлую тему" if is_dark else "Переключить на темную тему",
     )
+
+
+@app.callback(
+    Output("dashboard-analysis-filters", "data"),
+    Output("analysis-filter-sync", "children"),
+    Input("mest-filter", "value"),
+    Input("ngdu-filter", "value"),
+    Input("area-filter", "value"),
+)
+def sync_analysis_filters_store(selected_mest, selected_ngdu, selected_areas):
+    payload = {
+        "mest": _filter_key(selected_mest, ALL_MEST_VALUE),
+        "ngdu": _filter_key(selected_ngdu, ALL_NGDU_VALUE),
+        "areas": _filter_key(selected_areas, ALL_AREAS_VALUE),
+    }
+    return payload, ""
 
 
 @app.callback(

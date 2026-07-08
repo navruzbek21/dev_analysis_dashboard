@@ -30,7 +30,7 @@ ALLOWED_METRICS = {
 
 MEAN_METRICS = {"wc", "debit_neft", "debit_liq", "kin", "kiz"}
 CHANGE_PERIODS = {"prev": 1, "3y": 3, "5y": 5}
-ALLOWED_TOOLS = {"metric_dynamics", "metric_change", "gtm_structure", "gtm_efficiency"}
+ALLOWED_TOOLS = {"metric_dynamics", "metric_change", "gtm_structure", "gtm_efficiency", "dataset_overview"}
 
 
 @dataclass(frozen=True)
@@ -62,20 +62,25 @@ def tools_schema() -> dict[str, Any]:
             },
             "gtm_efficiency": {
                 "description": "Эффективность ГТМ: количество операций, доля эффективных, средние приросты.",
-                "params": {"filters": {"mest": [], "direction": None, "areas": []}},
+                "params": {"filters": {"mest": [], "ngdu": [], "direction": None, "areas": []}},
+            },
+            "dataset_overview": {
+                "description": "Обзор доступных исходных parquet-таблиц и количества строк в текущем/полном срезе.",
+                "params": {"filters": {"mest": [], "ngdu": [], "areas": []}},
             },
         },
         "metrics": ALLOWED_METRICS,
     }
 
 
-def make_plan_prompt(user_text: str) -> str:
+def make_plan_prompt(user_text: str, dashboard_filters: dict[str, Any] | None = None) -> str:
     schema = tools_schema()
     return (
         "Ты аналитический диспетчер дашборда разработки месторождения. "
         "Верни только JSON без markdown. Не пиши SQL. Выбери один инструмент из списка. "
         "Если пользователь просит график/гистограмму/динамику, выбирай подходящий chart tool.\n"
         f"Доступные инструменты и метрики:\n{schema}\n\n"
+        f"Текущие фильтры дашборда (используй их, если пользователь ссылается на текущий срез): {dashboard_filters or {}}\n"
         "Формат ответа:\n"
         '{"tool":"metric_dynamics","params":{"metric":"dobycha_nefti","period":"prev",'
         '"hist_type":"traditional","filters":{"ngdu":[],"areas":[],"direction":null}},'
@@ -115,6 +120,8 @@ def fallback_plan(user_text: str) -> dict[str, Any]:
     if any(word in text for word in ["измен", "сравн", "прошл", "прирост", "паден", "сниз", "рост"]):
         period = "5y" if "5" in text else ("3y" if "3" in text else "prev")
         return {"tool": "metric_change", "params": {"metric": metric, "period": period, "filters": {}}, "explain": True}
+    if any(word in text for word in ["таблиц", "исходн", "данные", "датасет"]):
+        return {"tool": "dataset_overview", "params": {"filters": {}}, "explain": True}
     return {"tool": "metric_dynamics", "params": {"metric": metric, "filters": {}}, "explain": True}
 
 
@@ -131,6 +138,8 @@ def execute_plan(plan: dict[str, Any]) -> ToolResult:
         return gtm_structure(params)
     if tool == "gtm_efficiency":
         return gtm_efficiency(params)
+    if tool == "dataset_overview":
+        return dataset_overview(params)
     raise ValueError(f"Инструмент не реализован: {tool}")
 
 
@@ -198,6 +207,64 @@ def result_to_payload(result: ToolResult, explanation: str, plan: dict[str, Any]
     }
 
 
+def apply_dashboard_context(plan: dict[str, Any], user_text: str, dashboard_filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    out = dict(plan or {})
+    params = out.get("params") if isinstance(out.get("params"), dict) else {}
+    params = dict(params)
+    filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
+    filters = dict(filters)
+    context = dashboard_filters if isinstance(dashboard_filters, dict) else {}
+
+    for key in ["mest", "ngdu", "areas"]:
+        if not _selected_values(filters.get(key)) and _selected_values(context.get(key)):
+            filters[key] = context.get(key)
+
+    inferred_ngdu = _infer_ngdu_values(user_text)
+    if inferred_ngdu:
+        filters["ngdu"] = inferred_ngdu
+
+    params["filters"] = filters
+    out["params"] = params
+    return out
+
+
+def _infer_ngdu_values(text: str) -> list[str]:
+    matches = re.findall(r"н\s*г\s*д\s*у[^0-9A-Za-zА-Яа-я]*(\d+)", text or "", flags=re.I)
+    if not matches:
+        return []
+    options = data_service.get_ngdu_options(())
+    found = []
+    for number in matches:
+        pattern = re.compile(rf"(?<!\d){re.escape(number)}(?!\d)")
+        for option in options:
+            if pattern.search(str(option)) and option not in found:
+                found.append(option)
+    return found
+
+
+def dataset_overview(params: dict[str, Any]) -> ToolResult:
+    filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
+    year_filtered = _filtered_year_data(filters)
+    year_all = data_service.get_filtered_year_data((), (), ())
+    gtm_dataset = gtm_analysis.get_gtm_dataset()
+    rows = [
+        {"table": "yearly parquet", "rows_full": int(year_all.shape[0]), "rows_filtered": int(year_filtered.shape[0]), "columns": int(year_all.shape[1])},
+        {"table": "gtm_level", "rows_full": int(gtm_dataset.gtm_level.shape[0]), "rows_filtered": int(_filtered_gtm(filters).shape[0]), "columns": int(gtm_dataset.gtm_level.shape[1])},
+        {"table": "result_df", "rows_full": int(gtm_dataset.result_df.shape[0]), "rows_filtered": int(gtm_dataset.result_df.shape[0]), "columns": int(gtm_dataset.result_df.shape[1])},
+        {"table": "factor_analysis_df", "rows_full": int(gtm_dataset.factor_analysis_df.shape[0]), "rows_filtered": int(gtm_dataset.factor_analysis_df.shape[0]), "columns": int(gtm_dataset.factor_analysis_df.shape[1])},
+    ]
+    return ToolResult(
+        tool="dataset_overview",
+        title="Обзор доступных таблиц",
+        chart_type="table",
+        rows=_clean_rows(rows),
+        columns=["table", "rows_full", "rows_filtered", "columns"],
+        summary={"table_count": len(rows), "filtered_by": filters},
+        chart=None,
+        notes=_filter_notes(filters),
+    )
+
+
 def metric_dynamics(params: dict[str, Any]) -> ToolResult:
     metric = _validate_metric(params.get("metric"))
     data = _filtered_year_data(params.get("filters"))
@@ -250,6 +317,9 @@ def gtm_structure(params: dict[str, Any]) -> ToolResult:
     filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
     areas = _selected_values(filters.get("areas") or filters.get("plosh"))
     mest = _selected_values(filters.get("mest") or filters.get("selected_mest"))
+    ngdu = _selected_values(filters.get("ngdu") or filters.get("selected_ngdu"))
+    if ngdu and not areas:
+        areas = data_service.get_area_options(ngdu, mest)
     dataset = gtm_analysis.get_gtm_dataset()
     data = gtm_analysis.prepare_hist_data(areas or gtm_analysis.ALL, hist_type, dataset, mest or gtm_analysis.ALL)
     if data.empty:
@@ -288,11 +358,10 @@ def gtm_structure(params: dict[str, Any]) -> ToolResult:
 
 def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
     filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
-    dataset = gtm_analysis.get_gtm_dataset()
     direction = filters.get("direction") or gtm_analysis.ALL
     areas = _selected_values(filters.get("areas") or filters.get("plosh"))
     mest = _selected_values(filters.get("mest") or filters.get("selected_mest"))
-    gtm = gtm_analysis.filter_df(dataset.gtm_level, direction, areas or gtm_analysis.ALL, mest or gtm_analysis.ALL)
+    gtm = _filtered_gtm(filters, direction=direction, areas=areas, mest=mest)
     if gtm.empty:
         rows: list[dict[str, Any]] = []
         summary = {"gtm_count": 0, "efficiency_pct": 0.0, "avg_delta_oil": 0.0, "avg_delta_liq": 0.0}
@@ -327,6 +396,17 @@ def gtm_efficiency(params: dict[str, Any]) -> ToolResult:
         chart=_chart_payload("bar", rows, x="year", y="efficiency_pct", label="Эффективность, %"),
         notes=_filter_notes(filters),
     )
+
+
+def _filtered_gtm(filters: dict[str, Any], direction: Any = None, areas: list[Any] | None = None, mest: list[Any] | None = None) -> pd.DataFrame:
+    dataset = gtm_analysis.get_gtm_dataset()
+    direction_value = direction if direction is not None else (filters.get("direction") or gtm_analysis.ALL)
+    mest_values = mest if mest is not None else _selected_values(filters.get("mest") or filters.get("selected_mest"))
+    area_values = areas if areas is not None else _selected_values(filters.get("areas") or filters.get("plosh"))
+    ngdu_values = _selected_values(filters.get("ngdu") or filters.get("selected_ngdu"))
+    if ngdu_values and not area_values:
+        area_values = data_service.get_area_options(ngdu_values, mest_values)
+    return gtm_analysis.filter_df(dataset.gtm_level, direction_value, area_values or gtm_analysis.ALL, mest_values or gtm_analysis.ALL)
 
 
 def _filtered_year_data(filters: Any) -> pd.DataFrame:

@@ -94,3 +94,41 @@ def test_normalize_messages_accepts_litellm_chat_history():
 
 def test_normalize_messages_falls_back_to_text():
     assert litellm_console.normalize_messages([], "fallback") == [{"role": "user", "content": "fallback"}]
+
+
+def test_render_page_reads_dashboard_filters_for_analysis():
+    page = litellm_console.render_page()
+
+    assert 'function readDashboardFilters()' in page
+    assert 'payload.dashboard_filters = readDashboardFilters();' in page
+
+
+def test_run_analysis_passes_dashboard_filters(monkeypatch):
+    captured = {"prompts": []}
+
+    def fake_prompt(prompt, model):
+        captured["prompts"].append(prompt)
+        return None
+
+    def fake_apply(plan, text, filters):
+        captured["filters"] = filters
+        return {"tool": "dataset_overview", "params": {"filters": filters or {}}}
+
+    def fake_execute(plan):
+        return litellm_console.analytics_tools.ToolResult(
+            tool="dataset_overview",
+            title="Обзор",
+            chart_type="table",
+            rows=[],
+            columns=[],
+            summary={},
+        )
+
+    monkeypatch.setattr(litellm_console, "litellm_prompt", fake_prompt)
+    monkeypatch.setattr(litellm_console.analytics_tools, "apply_dashboard_context", fake_apply)
+    monkeypatch.setattr(litellm_console.analytics_tools, "execute_plan", fake_execute)
+
+    litellm_console.run_analysis("проанализируй текущий срез", "model-a", {"ngdu": ["НГДУ 30"]})
+
+    assert any("Текущие фильтры дашборда" in prompt for prompt in captured["prompts"])
+    assert captured["filters"] == {"ngdu": ["НГДУ 30"]}
