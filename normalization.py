@@ -5,6 +5,9 @@ import pandas as pd
 AREA_COL_YEAR = "kod_ploshchadi"
 AREA_COL_MONTH = "kod_ploshchadi"
 MEST_COL = "mest"
+BLOCK_COL = "block"
+ALL_BLOCK_VALUE = "__ALL_BLOCK__"
+INCLUDE_BLOCK_ROWS_VALUE = "__INCLUDE_BLOCK_ROWS__"
 
 
 def safe_div(a, b):
@@ -56,6 +59,9 @@ def normalize_data(df2, dfy, area_col_month=AREA_COL_MONTH, area_col_year=AREA_C
         )
         area_mest = area_mest.groupby(area_col_year, as_index=False)[MEST_COL].first()
         dfy = dfy.merge(area_mest, on=area_col_year, how="left")
+
+    if BLOCK_COL not in dfy.columns:
+        dfy[BLOCK_COL] = "all"
 
     agg_kwargs = {}
     has_debit_pair = {"debit_neft", "debit_liq"}.issubset(df2.columns)

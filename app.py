@@ -17,16 +17,16 @@ try:
 except ImportError:
     LinearRegression = None
 from dash import Dash, dcc, html, Input, Output, State, ctx
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 from cache_backend import check_redis_connection
 from config import settings
-from db import check_database_connection
 from filter_utils import normalize_filter_values
-from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, safe_div
+from normalization import ALL_BLOCK_VALUE, AREA_COL_MONTH, AREA_COL_YEAR, BLOCK_COL, INCLUDE_BLOCK_ROWS_VALUE, MEST_COL, safe_div
 from services import aggregation_service, data_service, figure_service, periods_service
 import gtm_analysis
-import qwen_console
+import litellm_console
 
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -242,6 +242,25 @@ def _normalize_area_name(value) -> str:
     return re.sub(r"[^0-9a-zа-яё]+", "", text.casefold())
 
 
+def _split_contour_name(stem: str) -> tuple[str, str | None]:
+    match = re.match(r"^(?P<area>.+)_(?P<block>\d+(?:\.\d+)?)$", stem)
+    if match:
+        return match.group("area"), match.group("block")
+    return stem, None
+
+
+def _normalize_block_value(value) -> str:
+    if value in (None, "", ALL_BLOCK_VALUE):
+        return ALL_BLOCK_VALUE
+    text = str(value).strip()
+    return ALL_BLOCK_VALUE if text.lower() == "all" else text
+
+
+def _block_filter_key(value):
+    block = _normalize_block_value(value)
+    return [] if block == ALL_BLOCK_VALUE else [block]
+
+
 def _safe_initial_options(loader, label):
     try:
         return loader()
@@ -364,9 +383,21 @@ def bar_last_year(d, metric):
 def line_year_metric(d, metric):
     if d.empty or metric not in d.columns:
         return empty_fig()
-    fig = px.line(d, x="year", y=metric, color=AREA_COL_YEAR, markers=True)
-    fig.update_layout(xaxis_title="Год", yaxis_title=YEAR_METRICS[metric])
+    group_col, legend_title = _main_chart_group(d)
+    fig = px.line(d, x="year", y=metric, color=group_col, markers=True)
+    fig.update_layout(xaxis_title="Год", yaxis_title=YEAR_METRICS[metric], legend_title_text=legend_title)
     return apply_theme(fig)
+
+
+def _main_chart_group(d: pd.DataFrame) -> tuple[str, str]:
+    if BLOCK_COL in d.columns:
+        block_text = d[BLOCK_COL].astype(str).str.strip()
+        has_blocks = d[BLOCK_COL].notna() & ~block_text.str.lower().isin(["", "all"])
+        if has_blocks.any():
+            if "__block_label__" not in d.columns:
+                d["__block_label__"] = "Блок " + block_text
+            return "__block_label__", "Блок"
+    return AREA_COL_YEAR, "Площадь"
 
 
 def _aggregate_metric_by_area_year(d, metric):
@@ -375,17 +406,19 @@ def _aggregate_metric_by_area_year(d, metric):
     mean_metrics = {"wc", "wc_month_avg", "debit_neft", "debit_liq", "debit_vod", "priem"}
     agg_func = "mean" if metric in mean_metrics else "sum"
 
+    work = d.copy()
+    group_col, _legend_title = _main_chart_group(work)
     dd = (
-        d.dropna(subset=[AREA_COL_YEAR, "year", metric])
-        .groupby([AREA_COL_YEAR, "year"], as_index=False)
+        work.dropna(subset=[group_col, "year", metric])
+        .groupby([group_col, "year"], as_index=False)
         .agg(value=(metric, agg_func))
-        .sort_values([AREA_COL_YEAR, "year"])
+        .sort_values([group_col, "year"])
     )
-    dd["prev_value"] = dd.groupby(AREA_COL_YEAR)["value"].shift(1)
+    dd["prev_value"] = dd.groupby(group_col)["value"].shift(1)
     dd["change_pct"] = 100 * safe_div(dd["value"] - dd["prev_value"], dd["prev_value"])
     dd["year"] = dd["year"].astype(int)
     dd["year_label"] = dd["year"].astype(str)
-    return dd
+    return dd, group_col, _legend_title
 
 
 def change_bar(d, metric, period):
@@ -398,29 +431,29 @@ def change_bar(d, metric, period):
     # Годы выводятся на оси X в порядке возрастания.
     if period in {"3y", "5y"}:
         n_years = 3 if period == "3y" else 5
-        dd = _aggregate_metric_by_area_year(d, metric)
+        dd, group_col, legend_title = _aggregate_metric_by_area_year(d, metric)
         dd = (
             dd[(dd["year"] >= ly - n_years + 1) & (dd["year"] <= ly)]
             .dropna(subset=["change_pct"])
-            .sort_values(["year", AREA_COL_YEAR])
+            .sort_values(["year", group_col])
         )
 
         if dd.empty:
             return empty_fig("Недостаточно данных для год-к-году по выбранным площадям")
 
         year_order = [str(y) for y in sorted(dd["year"].unique())]
-        area_order = sorted(dd[AREA_COL_YEAR].dropna().unique())
+        area_order = sorted(dd[group_col].dropna().unique())
 
         fig = px.bar(
             dd,
             x="year_label",
             y="change_pct",
-            color=AREA_COL_YEAR,
+            color=group_col,
             barmode="group",
             text=[format_visible_pct_label(v) for v in dd["change_pct"]],
-            category_orders={"year_label": year_order, AREA_COL_YEAR: area_order},
+            category_orders={"year_label": year_order, group_col: area_order},
             hover_data={
-                AREA_COL_YEAR: True,
+                group_col: True,
                 "year_label": True,
                 "value": ":,.2f",
                 "prev_value": ":,.2f",
@@ -432,7 +465,7 @@ def change_bar(d, metric, period):
         fig.update_layout(
             xaxis_title="Год",
             yaxis_title="Изменение к предыдущему году, %",
-            legend_title_text="Площадь",
+            legend_title_text=legend_title,
             bargap=0.22,
             bargroupgap=0.08,
         )
@@ -442,7 +475,9 @@ def change_bar(d, metric, period):
 
     # Режим prev оставляем как было: срез последнего года по площадям к предыдущему году.
     rows = []
-    for area, g in d.groupby(AREA_COL_YEAR):
+    work = d.copy()
+    group_col, legend_title = _main_chart_group(work)
+    for area, g in work.groupby(group_col):
         g = g.sort_values("year")
         curr = g.loc[g["year"] == ly, metric]
         if curr.empty:
@@ -450,17 +485,18 @@ def change_bar(d, metric, period):
         curr = curr.iloc[0]
         base_s = g.loc[g["year"] == ly - 1, metric]
         base = base_s.iloc[0] if not base_s.empty else np.nan
-        rows.append({AREA_COL_YEAR: area, "change_pct": 100 * safe_div(pd.Series([curr - base]), pd.Series([base]))[0]})
+        rows.append({group_col: area, "change_pct": 100 * safe_div(pd.Series([curr - base]), pd.Series([base]))[0]})
 
     dd = pd.DataFrame(rows).dropna(subset=["change_pct"])
     if dd.empty:
         return empty_fig("Недостаточно данных для сравнения")
 
-    fig = px.bar(dd, x=AREA_COL_YEAR, y="change_pct", color=AREA_COL_YEAR, text=[format_visible_pct_label(v) for v in dd["change_pct"]])
+    fig = px.bar(dd, x=group_col, y="change_pct", color=group_col, text=[format_visible_pct_label(v) for v in dd["change_pct"]])
     fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
     fig.update_layout(
-        xaxis_title="Площадь",
+        xaxis_title=legend_title,
         yaxis_title="Изменение, %",
+        legend_title_text=legend_title,
     )
     fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=OP_MUTED)
     return apply_theme(fig)
@@ -474,17 +510,18 @@ def crossplot_debit_wc(d):
     if "debit_neft" not in x.columns:
         return empty_fig("Нет данных по debit_neft")
     x["wc_plot"] = x["wc"].combine_first(x["wc_month_avg"]) if "wc_month_avg" in x.columns and "wc" in x.columns else x.get("wc", np.nan)
+    group_col, legend_title = _main_chart_group(x)
     size_col = "dobycha_nefti" if "dobycha_nefti" in x.columns else None
     fig = px.scatter(
         x,
         x="wc_plot",
         y="debit_neft",
-        color=AREA_COL_YEAR,
+        color=group_col,
         size=size_col,
-        hover_data=[c for c in [AREA_COL_YEAR, "ngdu", "dobycha_nefti", "debit_liq"] if c in x.columns],
+        hover_data=[c for c in [group_col, AREA_COL_YEAR, BLOCK_COL, "ngdu", "dobycha_nefti", "debit_liq"] if c in x.columns],
         labels={"wc_plot": "Средняя обводнённость, %", "debit_neft": "Средний дебит нефти, т/сут"},
     )
-    fig.update_layout()
+    fig.update_layout(legend_title_text=legend_title)
     return apply_theme(fig)
 
 
@@ -520,26 +557,69 @@ def _load_area_contours() -> dict[str, dict]:
         if len(points) < 3:
             logger.warning("Area contour file has fewer than 3 points: %s", path)
             continue
-        area_name = path.stem
-        contours[_normalize_area_name(area_name)] = {"area": area_name, "path": str(path), "points": points}
+        area_name, block = _split_contour_name(path.stem)
+        contour = {"area": area_name, "block": block, "path": str(path), "points": points}
+        if block:
+            contours[f"{_normalize_area_name(area_name)}::{block}"] = contour
+        else:
+            contours[_normalize_area_name(area_name)] = contour
     return contours
 
 
-def _latest_metric_by_area(d: pd.DataFrame, metric: str) -> pd.DataFrame:
+def _latest_metric_by_area(d: pd.DataFrame, metric: str, block_mode: str = "area") -> pd.DataFrame:
     if d.empty or metric not in d.columns:
-        return pd.DataFrame(columns=[AREA_COL_YEAR, "value", "year"])
+        return pd.DataFrame(columns=[AREA_COL_YEAR, BLOCK_COL, "value", "year"])
     ly = int(d["year"].max())
     current = d[d["year"] == ly].dropna(subset=[AREA_COL_YEAR, metric]).copy()
     if current.empty:
-        return pd.DataFrame(columns=[AREA_COL_YEAR, "value", "year"])
+        return pd.DataFrame(columns=[AREA_COL_YEAR, BLOCK_COL, "value", "year"])
+    if BLOCK_COL not in current.columns:
+        current[BLOCK_COL] = "all"
+    block_text = current[BLOCK_COL].astype(str).str.strip().str.lower()
+    if block_mode == "block":
+        current = current[current[BLOCK_COL].notna() & ~block_text.isin(["", "all"])].copy()
+        group_cols = [AREA_COL_YEAR, BLOCK_COL]
+    else:
+        area_level = current[BLOCK_COL].isna() | block_text.isin(["", "all"])
+        if area_level.any():
+            current = current[area_level].copy()
+        group_cols = [AREA_COL_YEAR]
     mean_metrics = {"wc", "wc_month_avg", "debit_neft", "debit_liq", "debit_vod", "priem"}
     agg_func = "mean" if metric in mean_metrics else "sum"
-    result = current.groupby(AREA_COL_YEAR, as_index=False).agg(value=(metric, agg_func))
+    result = current.groupby(group_cols, as_index=False).agg(value=(metric, agg_func))
+    if BLOCK_COL not in result.columns:
+        result[BLOCK_COL] = "all"
     result["year"] = ly
     return result
 
 
-def area_metric_contour_map(d: pd.DataFrame, metric: str):
+def _block_annotation_metrics(d: pd.DataFrame, area, block, year) -> list[str]:
+    if d.empty or BLOCK_COL not in d.columns:
+        return []
+    block_text = d[BLOCK_COL].astype(str).str.strip()
+    part = d[d[AREA_COL_YEAR].eq(area) & block_text.eq(str(block).strip())].copy()
+    if part.empty:
+        return []
+    part["year"] = pd.to_numeric(part["year"], errors="coerce")
+    current = part[part["year"].eq(year)].copy()
+    if current.empty:
+        current = part[part["year"].eq(part["year"].max())].copy()
+    row = current.iloc[0]
+    lines = []
+    if "niz" in row and "dobycha_nefti_cum" in row and pd.notna(row.get("niz")) and pd.notna(row.get("dobycha_nefti_cum")):
+        lines.append(f"Ост. НИЗ: {compact(float(row['niz']) - float(row['dobycha_nefti_cum']))}")
+    if "niz_otbor" in row and pd.notna(row.get("niz_otbor")):
+        lines.append(f"Котб НИЗ: {float(row['niz_otbor']):.2f}")
+    pressure_col = "Р_пл" if "Р_пл" in part.columns else ("p_pl" if "p_pl" in part.columns else None)
+    if pressure_col:
+        first_pressure = pd.to_numeric(part.sort_values("year")[pressure_col], errors="coerce").dropna()
+        current_pressure = pd.to_numeric(current[pressure_col], errors="coerce").dropna()
+        if not first_pressure.empty and not current_pressure.empty and first_pressure.iloc[0] != 0:
+            lines.append(f"Ртек/Рнач: {current_pressure.iloc[0] / first_pressure.iloc[0]:.2f}")
+    return lines
+
+
+def area_metric_contour_map(d: pd.DataFrame, metric: str, selected_areas=()):
     if d.empty or metric not in d.columns:
         return empty_fig("Нет данных для карты площадей")
 
@@ -553,11 +633,27 @@ def area_metric_contour_map(d: pd.DataFrame, metric: str):
 
     values["area_key"] = values[AREA_COL_YEAR].map(_normalize_area_name)
     value_by_key = values.set_index("area_key").to_dict("index")
+    selected_area_values = normalize_filter_values(selected_areas)
+    single_area = selected_area_values[0] if len(selected_area_values) == 1 else None
+    block_values = pd.DataFrame()
+    if single_area:
+        block_source = d[d[AREA_COL_YEAR].eq(single_area)] if AREA_COL_YEAR in d.columns else d
+        block_values = _latest_metric_by_area(block_source, metric, block_mode="block")
+
     matched_keys = [key for key in value_by_key if key in contours]
-    if not matched_keys:
+    block_rows = []
+    for row in block_values.to_dict("records"):
+        block = _normalize_block_value(row.get(BLOCK_COL))
+        block_key = f"{_normalize_area_name(row.get(AREA_COL_YEAR))}::{block}"
+        if block != ALL_BLOCK_VALUE and block_key in contours:
+            block_rows.append((block_key, row))
+    if not matched_keys and not block_rows:
         return empty_fig("Нет совпадений между названиями площадей и файлами контуров")
 
-    metric_values = np.array([float(value_by_key[key]["value"]) for key in matched_keys], dtype=float)
+    metric_values = np.array(
+        [float(value_by_key[key]["value"]) for key in matched_keys] + [float(row["value"]) for _key, row in block_rows],
+        dtype=float,
+    )
     finite_values = metric_values[np.isfinite(metric_values)]
     if finite_values.size == 0:
         return empty_fig("Нет числовых значений показателя для карты площадей")
@@ -566,10 +662,15 @@ def area_metric_contour_map(d: pd.DataFrame, metric: str):
 
     fig = go.Figure()
     annotations = []
-    for key in matched_keys:
+    click_x = []
+    click_y = []
+    click_text = []
+    click_customdata = []
+
+    def add_contour_trace(key, row, is_block=False):
         contour = contours[key]
         points = contour["points"]
-        area_value = float(value_by_key[key]["value"])
+        area_value = float(row["value"])
         norm_value = 0.5 if denom == 0 else (area_value - vmin) / denom
         fill_color = px.colors.sample_colorscale(HEAT_SCALE, [float(np.clip(norm_value, 0, 1))])[0]
         x = points["x"].tolist()
@@ -578,18 +679,24 @@ def area_metric_contour_map(d: pd.DataFrame, metric: str):
             x.append(x[0])
             y.append(y[0])
 
-        area_label = value_by_key[key][AREA_COL_YEAR]
+        area_label = row[AREA_COL_YEAR]
+        block = _normalize_block_value(row.get(BLOCK_COL))
+        label_text = f"Блок {block}" if is_block else str(area_label)
+        annotation_lines = _block_annotation_metrics(d, area_label, block, row["year"]) if is_block else []
         fig.add_trace(
             go.Scatter(
                 x=x,
                 y=y,
                 mode="lines",
-                name=str(area_label),
+                name=label_text,
                 fill="toself",
                 fillcolor=fill_color,
-                line=dict(color=OP_GREEN_DEEP, width=1.4),
-                customdata=[[area_label, area_value, int(value_by_key[key]["year"])]] * len(x),
-                hovertemplate="Площадь %{customdata[0]}<br>Год %{customdata[2]}<br>"
+                hoveron="fills+points",
+                line=dict(color=OP_RED if is_block else OP_GREEN_DEEP, width=2.0 if is_block else 1.4),
+                customdata=[[area_label, area_value, int(row["year"]), block if is_block else ALL_BLOCK_VALUE]] * len(x),
+                hovertemplate="Площадь %{customdata[0]}<br>"
+                + ("Блок %{customdata[3]}<br>" if is_block else "")
+                + "Год %{customdata[2]}<br>"
                 + f"{YEAR_METRICS.get(metric, metric)}: "
                 + "%{customdata[1]:,.2f}<extra></extra>",
                 showlegend=False,
@@ -599,12 +706,40 @@ def area_metric_contour_map(d: pd.DataFrame, metric: str):
             dict(
                 x=float(points["x"].mean()),
                 y=float(points["y"].mean()),
-                text=f"{area_label}<br>{compact(area_value)}",
+                text="<br>".join(([f"{label_text}: {compact(area_value)}"] if is_block else [label_text, compact(area_value)]) + annotation_lines),
                 showarrow=False,
                 font=dict(size=11, color=OP_INK),
                 bgcolor="rgba(255,255,255,0.72)",
                 bordercolor="rgba(0,0,0,0.08)",
                 borderpad=3,
+                captureevents=False,
+            )
+        )
+        click_x.append(float(points["x"].mean()))
+        click_y.append(float(points["y"].mean()))
+        click_text.append(label_text)
+        click_customdata.append([area_label, area_value, int(row["year"]), block if is_block else ALL_BLOCK_VALUE])
+
+    for key in matched_keys:
+        add_contour_trace(key, value_by_key[key], is_block=False)
+    for key, row in block_rows:
+        add_contour_trace(key, row, is_block=True)
+
+    if click_x:
+        fig.add_trace(
+            go.Scatter(
+                x=click_x,
+                y=click_y,
+                mode="markers+text",
+                text=click_text,
+                textposition="middle center",
+                marker=dict(size=56, color="rgba(0,142,91,0.04)", line=dict(color="rgba(0,107,69,0.35)", width=1)),
+                customdata=click_customdata,
+                hovertemplate="Площадь %{customdata[0]}<br>"
+                + "Блок %{customdata[3]}<br>"
+                + f"{YEAR_METRICS.get(metric, metric)}: "
+                + "%{customdata[1]:,.2f}<extra></extra>",
+                showlegend=False,
             )
         )
 
@@ -1904,6 +2039,24 @@ def main_tab_layout():
 def asset_tab_layout():
     return html.Div(
         [
+            html.Div(
+                dbc.Row(
+                    dbc.Col(
+                        [
+                            html.Label("Блок/участок площади"),
+                            dcc.Dropdown(
+                                id="asset-block-filter",
+                                options=[{"label": "Вся площадь", "value": ALL_BLOCK_VALUE}],
+                                value=ALL_BLOCK_VALUE,
+                                clearable=False,
+                            ),
+                        ],
+                        md=4,
+                    ),
+                    className="g-3",
+                ),
+                className="control-panel mb-4",
+            ),
             dbc.Row([dbc.Col(graph_card("1. Динамика основных технологических показателей разработки", "g01", "650px"), lg=12, className="mb-4")]),
             dbc.Row(
                 [
@@ -1971,7 +2124,7 @@ app.index_string = """
 </html>
 """
 server = app.server
-qwen_console.register_routes(server)
+litellm_console.register_routes(server)
 gtm_analysis.register_callbacks(app)
 
 
@@ -1982,17 +2135,17 @@ def health():
 
 @server.route("/ready")
 def ready():
-    db_ok = True if settings.is_parquet else check_database_connection()
+    parquet_ok = True
     redis_ok = check_redis_connection()
     try:
         dataset_version = data_service.get_dataset_version_cached()
     except Exception:
         logger.exception("Dataset version readiness check failed")
         dataset_version = None
-    status_code = 200 if db_ok and dataset_version else 503
+    status_code = 200 if parquet_ok and dataset_version else 503
     return {
         "status": "ready" if status_code == 200 else "not_ready",
-        "database": db_ok,
+        "parquet": parquet_ok,
         "redis": redis_ok,
         "dataset_version": dataset_version,
     }, status_code
@@ -2000,6 +2153,8 @@ def ready():
 app.layout = html.Div(
     [
         dcc.Store(id="theme-store", storage_type="local", data="light"),
+        dcc.Store(id="dashboard-analysis-filters", storage_type="local"),
+        dcc.Store(id="selected-block-store", storage_type="session", data=ALL_BLOCK_VALUE),
         html.Div(
             dbc.Row(
                 [
@@ -2045,10 +2200,11 @@ app.layout = html.Div(
                         dbc.Tab(label="Основные показатели", tab_id="tab-main"),
                         dbc.Tab(label="Анализ по активу", tab_id="tab-asset"),
                         dbc.Tab(label="Анализ эффективности ГТМ", tab_id="tab-gtm"),
-                        dbc.Tab(label="Консоль Qwen", tab_id="tab-qwen"),
+                        dbc.Tab(label="Консоль LiteLLM", tab_id="tab-litellm"),
                     ],
                 ),
                 dcc.Loading(html.Div(id="scenario-content"), type="circle", color=OP_GREEN),
+                html.Div(id="analysis-filter-sync", style={"display": "none"}),
             ],
             fluid=True,
             className="py-4 px-4",
@@ -2086,6 +2242,26 @@ def apply_app_theme(theme):
 
 
 @app.callback(
+    Output("dashboard-analysis-filters", "data"),
+    Output("analysis-filter-sync", "children"),
+    Input("mest-filter", "value"),
+    Input("ngdu-filter", "value"),
+    Input("area-filter", "value"),
+    Input("selected-block-store", "data"),
+)
+def sync_analysis_filters_store(selected_mest, selected_ngdu, selected_areas, selected_block):
+    payload = {
+        "mest": _filter_key(selected_mest, ALL_MEST_VALUE),
+        "ngdu": _filter_key(selected_ngdu, ALL_NGDU_VALUE),
+        "areas": _filter_key(selected_areas, ALL_AREAS_VALUE),
+    }
+    block_key = _block_filter_key(selected_block)
+    if block_key:
+        payload["block"] = block_key
+    return payload, ""
+
+
+@app.callback(
     Output("mest-filter", "options"),
     Output("mest-filter", "value"),
     Output("ngdu-filter", "options"),
@@ -2093,14 +2269,17 @@ def apply_app_theme(theme):
     Output("area-filter", "options"),
     Output("area-filter", "value"),
     Output("scenario-tabs", "active_tab"),
+    Output("selected-block-store", "data"),
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
     Input("reset-filters", "n_clicks"),
     Input("scenario-tabs", "active_tab"),
+    State("selected-block-store", "data"),
 )
-def sync_global_filters(selected_mest, selected_ngdu, selected_areas, _reset_clicks, active_tab):
+def sync_global_filters(selected_mest, selected_ngdu, selected_areas, _reset_clicks, active_tab, stored_block):
     trigger = ctx.triggered_id
+    selected_block = _normalize_block_value(stored_block)
 
     if trigger == "reset-filters":
         selected_mest = [ALL_MEST_VALUE]
@@ -2122,6 +2301,7 @@ def sync_global_filters(selected_mest, selected_ngdu, selected_areas, _reset_cli
 
     if trigger == "area-filter" and len(area_key) == 1:
         active_tab = "tab-asset"
+        selected_block = ALL_BLOCK_VALUE
     elif trigger == "reset-filters":
         active_tab = "tab-main"
 
@@ -2145,7 +2325,34 @@ def sync_global_filters(selected_mest, selected_ngdu, selected_areas, _reset_cli
         _options_with_all(area_values, "Все площади", ALL_AREAS_VALUE),
         area_value,
         active_tab,
+        selected_block,
     )
+
+
+@app.callback(
+    Output("area-filter", "value", allow_duplicate=True),
+    Output("scenario-tabs", "active_tab", allow_duplicate=True),
+    Output("selected-block-store", "data", allow_duplicate=True),
+    Input("main-area-map", "clickData"),
+    prevent_initial_call=True,
+)
+def select_area_or_block_from_map(map_click):
+    point = (map_click or {}).get("points") or [{}]
+    custom = point[0].get("customdata") or []
+    if not custom:
+        raise PreventUpdate
+    selected_block = _normalize_block_value(custom[3] if len(custom) > 3 else ALL_BLOCK_VALUE)
+    active_tab = "tab-asset" if selected_block != ALL_BLOCK_VALUE else "tab-main"
+    return [custom[0]], active_tab, selected_block
+
+
+@app.callback(
+    Output("selected-block-store", "data", allow_duplicate=True),
+    Input("asset-block-filter", "value"),
+    prevent_initial_call=True,
+)
+def sync_selected_block_from_asset_filter(asset_block):
+    return _normalize_block_value(asset_block)
 
 
 @app.callback(
@@ -2212,11 +2419,31 @@ def update_header(selected_mest, selected_ngdu, selected_areas):
 def render_tab(active_tab):
     if active_tab == "tab-gtm":
         return gtm_analysis.layout()
-    if active_tab == "tab-qwen":
-        return qwen_console.layout()
+    if active_tab == "tab-litellm":
+        return litellm_console.layout()
     if active_tab == "tab-asset":
         return asset_tab_layout()
     return main_tab_layout()
+
+
+@app.callback(
+    Output("asset-block-filter", "options"),
+    Output("asset-block-filter", "value"),
+    Input("mest-filter", "value"),
+    Input("ngdu-filter", "value"),
+    Input("area-filter", "value"),
+    Input("selected-block-store", "data"),
+)
+def update_asset_block_options(selected_mest, selected_ngdu, selected_areas, selected_block):
+    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
+    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
+    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
+    blocks = data_service.get_block_options(ngdu_key, area_key, mest_key)
+    options = [{"label": "Вся площадь", "value": ALL_BLOCK_VALUE}] + [{"label": f"Блок {block}", "value": block} for block in blocks]
+    selected = _normalize_block_value(selected_block)
+    if selected not in {option["value"] for option in options}:
+        selected = ALL_BLOCK_VALUE
+    return options, selected
 
 
 @app.callback(
@@ -2238,12 +2465,16 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
     ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
     area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
     d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
+    d_map = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key, [INCLUDE_BLOCK_ROWS_VALUE])
+    block_text = d_map[BLOCK_COL].astype(str).str.strip().str.lower() if BLOCK_COL in d_map.columns else pd.Series(dtype=str)
+    block_rows = d_map[d_map[BLOCK_COL].notna() & ~block_text.isin(["", "all"])].copy() if BLOCK_COL in d_map.columns else pd.DataFrame()
+    d_visual = block_rows if len(area_key) == 1 and not block_rows.empty else d
     main_change = figure_service.get_cached_figure(
         "main-change",
         ngdu_key,
         area_key,
-        {"metric": metric, "period": period, "selected_mest": mest_key},
-        lambda: change_bar(d, metric, period),
+        {"metric": metric, "period": period, "selected_mest": mest_key, "block_visual": not block_rows.empty},
+        lambda: change_bar(d_visual, metric, period),
     )
     logger.info(
         "callback=update_main mest_count=%s ngdu_count=%s area_count=%s metric=%s period=%s total_ms=%.1f",
@@ -2255,10 +2486,10 @@ def update_main(selected_mest, selected_ngdu, selected_areas, metric, period, th
         (time.perf_counter() - started) * 1000,
     )
     return (
-        apply_runtime_theme(area_metric_contour_map(d, metric), theme),
+        apply_runtime_theme(area_metric_contour_map(d_map, metric, area_key), theme),
         apply_runtime_theme(main_change, theme),
-        apply_runtime_theme(line_year_metric(d, metric), theme),
-        apply_runtime_theme(crossplot_debit_wc(d), theme),
+        apply_runtime_theme(line_year_metric(d_visual, metric), theme),
+        apply_runtime_theme(crossplot_debit_wc(d_visual), theme),
     )
 
 
@@ -2291,16 +2522,18 @@ def _build_analysis_figure(spec_id, y, x, title, x_title, y_title, d, period_res
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
+    Input("asset-block-filter", "value"),
     Input("theme-store", "data"),
 )
-def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
+def update_asset(selected_mest, selected_ngdu, selected_areas, selected_block, theme):
     started = time.perf_counter()
     mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
     ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
     area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
-    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
-    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key)
-    period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, n_periods=6, min_size=5)
+    block_key = _block_filter_key(selected_block)
+    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key, block_key)
+    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key, block_key)
+    period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, block_key, n_periods=6, min_size=5)
 
     def safe_build(name, builder):
         try:
@@ -2316,7 +2549,7 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
                 "g01",
                 ngdu_key,
                 area_key,
-                {"selected_mest": mest_key},
+                {"selected_mest": mest_key, "selected_blocks": block_key},
                 lambda: tech_dynamics(d, yearly_agg),
                 use_lock=True,
             ),
@@ -2329,7 +2562,7 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
                 "g16",
                 ngdu_key,
                 area_key,
-                {"selected_mest": mest_key, "n_periods": 6, "min_size": 5},
+                {"selected_mest": mest_key, "selected_blocks": block_key, "n_periods": 6, "min_size": 5},
                 lambda: segmented_wc_kiz(d, period_result=period_result),
                 use_lock=True,
             ),
@@ -2340,7 +2573,7 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
                 "g20",
                 ngdu_key,
                 area_key,
-                {"selected_mest": mest_key, "n_periods": 6, "min_size": 5},
+                {"selected_mest": mest_key, "selected_blocks": block_key, "n_periods": 6, "min_size": 5},
                 lambda: ratio_vs_q_by_wc_kiz_periods(d, period_result=period_result),
                 use_lock=True,
             ),
@@ -2366,10 +2599,11 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, theme):
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
+    Input("asset-block-filter", "value"),
     Input("theme-store", "data"),
     *[Input(f"{spec[0]}-period", "value") for spec in DISPLACEMENT_SPECS],
 )
-def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, theme, *displacement_periods):
+def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, selected_block, theme, *displacement_periods):
     if not n_clicks:
         hidden_count = len(ADDITIONAL_ANALYSIS_SPECS) + len(DISPLACEMENT_SPECS)
         hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * hidden_count
@@ -2379,9 +2613,10 @@ def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, sele
     mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
     ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
     area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
-    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key)
-    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key)
-    period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, n_periods=6, min_size=5)
+    block_key = _block_filter_key(selected_block)
+    d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key, block_key)
+    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key, block_key)
+    period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, block_key, n_periods=6, min_size=5)
 
     def safe_build(name, builder):
         try:

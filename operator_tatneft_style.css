@@ -449,17 +449,17 @@ body {
   background: transparent;
 }
 
-.qwen-console-tab {
+.litellm-console-tab {
   min-height: 72vh;
 }
 
-.qwen-console-shell {
+.litellm-console-shell {
   padding: 0;
   min-height: 72vh;
   overflow: hidden;
 }
 
-.qwen-console-frame {
+.litellm-console-frame {
   display: block;
   width: 100%;
   height: min(78vh, 860px);
