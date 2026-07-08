@@ -166,10 +166,11 @@ def period_result_from_bytes(data):
     )
 
 
-def get_wc_kiz_periods(selected_ngdu, selected_areas, selected_mest=(), n_periods=6, min_size=5):
+def get_wc_kiz_periods(selected_ngdu, selected_areas, selected_mest=(), selected_blocks=(), n_periods=6, min_size=5):
     selected_ngdu = data_service.normalize_filter_values(selected_ngdu)
     selected_areas = data_service.normalize_filter_values(selected_areas)
     selected_mest = data_service.normalize_filter_values(selected_mest)
+    selected_blocks = data_service.normalize_filter_values(selected_blocks)
     dataset_version = data_service.get_dataset_version_cached()
     key = build_cache_key(
         "wc_kiz_periods",
@@ -179,15 +180,16 @@ def get_wc_kiz_periods(selected_ngdu, selected_areas, selected_mest=(), n_period
                 "selected_ngdu": selected_ngdu,
                 "selected_areas": selected_areas,
                 "selected_mest": selected_mest,
+                "selected_blocks": selected_blocks,
                 "n_periods": int(n_periods),
                 "min_size": int(min_size),
-                "algorithm_version": PERIODS_ALGORITHM_VERSION,
+                "algorithm_version": PERIODS_ALGORITHM_VERSION + "-block",
             },
         ),
     )
 
     def loader():
-        d = data_service.get_filtered_year_data(selected_ngdu, selected_areas, selected_mest)
+        d = data_service.get_filtered_year_data(selected_ngdu, selected_areas, selected_mest, selected_blocks)
         return compute_wc_kiz_periods_raw(d, n_periods=n_periods, min_size=min_size)
 
     result = get_or_compute(

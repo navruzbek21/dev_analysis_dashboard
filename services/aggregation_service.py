@@ -94,10 +94,11 @@ def compute_asset_year_aggregate(d):
     return aggregate
 
 
-def get_asset_year_aggregate(selected_ngdu, selected_areas, selected_mest=()):
+def get_asset_year_aggregate(selected_ngdu, selected_areas, selected_mest=(), selected_blocks=()):
     selected_ngdu = data_service.normalize_filter_values(selected_ngdu)
     selected_areas = data_service.normalize_filter_values(selected_areas)
     selected_mest = data_service.normalize_filter_values(selected_mest)
+    selected_blocks = data_service.normalize_filter_values(selected_blocks)
     dataset_version = data_service.get_dataset_version_cached()
     key = build_cache_key(
         "asset_year_aggregate",
@@ -107,13 +108,14 @@ def get_asset_year_aggregate(selected_ngdu, selected_areas, selected_mest=()):
                 "selected_ngdu": selected_ngdu,
                 "selected_areas": selected_areas,
                 "selected_mest": selected_mest,
-                "aggregate_version": "asset-year-v2",
+                "selected_blocks": selected_blocks,
+                "aggregate_version": "asset-year-v3-block",
             },
         ),
     )
 
     def loader():
-        d = data_service.get_filtered_year_data(selected_ngdu, selected_areas, selected_mest)
+        d = data_service.get_filtered_year_data(selected_ngdu, selected_areas, selected_mest, selected_blocks)
         return compute_asset_year_aggregate(d)
 
     result = get_or_compute(
