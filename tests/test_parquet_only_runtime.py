@@ -61,3 +61,53 @@ def test_apply_dashboard_context_infers_ngdu_from_text(monkeypatch):
     enriched = analytics_tools.apply_dashboard_context(plan, "эффективность ГТМ по НГДУ 30", {})
 
     assert enriched["params"]["filters"]["ngdu"] == ["НГДУ 30"]
+
+
+def test_table_analysis_groups_and_aggregates(monkeypatch):
+    import pandas as pd
+    import analytics_tools
+
+    df = pd.DataFrame(
+        {
+            "year": [2024, 2024, 2025],
+            "ngdu": ["НГДУ 30", "НГДУ 31", "НГДУ 30"],
+            "dobycha_nefti": [10.0, 20.0, 30.0],
+        }
+    )
+    monkeypatch.setattr(analytics_tools, "_load_table_frame", lambda table, filters: df.copy())
+
+    result = analytics_tools.table_analysis(
+        {
+            "table": "yearly",
+            "where": {"ngdu": ["НГДУ 30"]},
+            "group_by": ["year"],
+            "metrics": [{"column": "dobycha_nefti", "agg": "sum", "alias": "oil"}],
+            "sort_by": "year",
+            "sort_desc": False,
+        }
+    )
+
+    assert result.tool == "table_analysis"
+    assert result.columns == ["year", "oil"]
+    assert result.rows == [{"year": 2024, "oil": 10.0}, {"year": 2025, "oil": 30.0}]
+
+
+def test_table_analysis_rejects_unknown_columns_and_caps_limit(monkeypatch):
+    import pandas as pd
+    import analytics_tools
+
+    df = pd.DataFrame({"year": [2024, 2025], "value": [1, 2]})
+    monkeypatch.setattr(analytics_tools, "_load_table_frame", lambda table, filters: df.copy())
+
+    result = analytics_tools.table_analysis(
+        {
+            "table": "yearly",
+            "group_by": ["missing"],
+            "metrics": [{"column": "missing", "agg": "sum"}],
+            "columns": ["year", "missing", "value"],
+            "limit": 999,
+        }
+    )
+
+    assert result.columns == ["year", "value"]
+    assert result.summary["limit"] == 200

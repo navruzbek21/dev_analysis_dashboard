@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import math
 import re
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,8 +11,9 @@ import numpy as np
 import pandas as pd
 
 import gtm_analysis
+from config import settings
 from filter_utils import normalize_filter_values
-from normalization import AREA_COL_YEAR, safe_div
+from normalization import AREA_COL_MONTH, AREA_COL_YEAR, MEST_COL, safe_div
 from services import data_service
 
 
@@ -30,7 +32,9 @@ ALLOWED_METRICS = {
 
 MEAN_METRICS = {"wc", "debit_neft", "debit_liq", "kin", "kiz"}
 CHANGE_PERIODS = {"prev": 1, "3y": 3, "5y": 5}
-ALLOWED_TOOLS = {"metric_dynamics", "metric_change", "gtm_structure", "gtm_efficiency", "dataset_overview"}
+ALLOWED_TOOLS = {"metric_dynamics", "metric_change", "gtm_structure", "gtm_efficiency", "dataset_overview", "table_analysis"}
+TABLE_ANALYSIS_AGGS = {"sum", "mean", "median", "min", "max", "count", "nunique"}
+TABLE_ANALYSIS_TABLES = {"monthly_raw", "yearly_raw", "yearly", "gtm_level", "result_df", "factor_analysis_df"}
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,21 @@ def tools_schema() -> dict[str, Any]:
                 "description": "Обзор доступных исходных parquet-таблиц и количества строк в текущем/полном срезе.",
                 "params": {"filters": {"mest": [], "ngdu": [], "areas": []}},
             },
+            "table_analysis": {
+                "description": "Произвольный безопасный анализ исходных/агрегированных таблиц: фильтры, группировки, агрегации, сортировка, лимит.",
+                "tables": sorted(TABLE_ANALYSIS_TABLES),
+                "aggregations": sorted(TABLE_ANALYSIS_AGGS),
+                "params": {
+                    "table": "yearly",
+                    "filters": {"mest": [], "ngdu": [], "areas": []},
+                    "where": {"column_name": ["value"]},
+                    "group_by": ["year"],
+                    "metrics": [{"column": "dobycha_nefti", "agg": "sum", "alias": "oil_sum"}],
+                    "sort_by": "oil_sum",
+                    "sort_desc": True,
+                    "limit": 50,
+                },
+            },
         },
         "metrics": ALLOWED_METRICS,
     }
@@ -81,6 +100,7 @@ def make_plan_prompt(user_text: str, dashboard_filters: dict[str, Any] | None = 
         "Если пользователь просит график/гистограмму/динамику, выбирай подходящий chart tool.\n"
         f"Доступные инструменты и метрики:\n{schema}\n\n"
         f"Текущие фильтры дашборда (используй их, если пользователь ссылается на текущий срез): {dashboard_filters or {}}\n"
+        f"Доступные таблицы и колонки для table_analysis:\n{table_schema_summary()}\n"
         "Формат ответа:\n"
         '{"tool":"metric_dynamics","params":{"metric":"dobycha_nefti","period":"prev",'
         '"hist_type":"traditional","filters":{"ngdu":[],"areas":[],"direction":null}},'
@@ -120,6 +140,8 @@ def fallback_plan(user_text: str) -> dict[str, Any]:
     if any(word in text for word in ["измен", "сравн", "прошл", "прирост", "паден", "сниз", "рост"]):
         period = "5y" if "5" in text else ("3y" if "3" in text else "prev")
         return {"tool": "metric_change", "params": {"metric": metric, "period": period, "filters": {}}, "explain": True}
+    if any(word in text for word in ["сгрупп", "топ", "top", "сумм", "средн", "максим", "миним", "разрез", "по год", "по нгду", "по площад"]):
+        return {"tool": "table_analysis", "params": {"table": "yearly", "filters": {}, "group_by": ["year"], "metrics": [{"column": metric, "agg": "sum"}], "limit": 50}, "explain": True}
     if any(word in text for word in ["таблиц", "исходн", "данные", "датасет"]):
         return {"tool": "dataset_overview", "params": {"filters": {}}, "explain": True}
     return {"tool": "metric_dynamics", "params": {"metric": metric, "filters": {}}, "explain": True}
@@ -140,6 +162,8 @@ def execute_plan(plan: dict[str, Any]) -> ToolResult:
         return gtm_efficiency(params)
     if tool == "dataset_overview":
         return dataset_overview(params)
+    if tool == "table_analysis":
+        return table_analysis(params)
     raise ValueError(f"Инструмент не реализован: {tool}")
 
 
@@ -177,6 +201,11 @@ def fallback_explanation(user_text: str, result: ToolResult) -> str:
             f"Построена структура добычи и дополнительной добычи по ГТМ. "
             f"Суммарное значение в срезе: {_fmt_number(total)}; крупнейшая категория: {top_category or 'не определена'}. "
             "Для интерпретации стоит сравнить вклад направлений ГТМ с базовой добычей по годам."
+        )
+    if result.tool == "table_analysis":
+        return (
+            f"Выполнил табличный анализ: получено {summary.get('row_count', 0)} строк из {summary.get('source_rows', 0)} строк источника. "
+            f"Таблица: {summary.get('table')}; группировка: {summary.get('group_by') or 'без группировки'}."
         )
     if result.tool == "gtm_efficiency":
         return (
@@ -244,15 +273,11 @@ def _infer_ngdu_values(text: str) -> list[str]:
 
 def dataset_overview(params: dict[str, Any]) -> ToolResult:
     filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
-    year_filtered = _filtered_year_data(filters)
-    year_all = data_service.get_filtered_year_data((), (), ())
-    gtm_dataset = gtm_analysis.get_gtm_dataset()
-    rows = [
-        {"table": "yearly parquet", "rows_full": int(year_all.shape[0]), "rows_filtered": int(year_filtered.shape[0]), "columns": int(year_all.shape[1])},
-        {"table": "gtm_level", "rows_full": int(gtm_dataset.gtm_level.shape[0]), "rows_filtered": int(_filtered_gtm(filters).shape[0]), "columns": int(gtm_dataset.gtm_level.shape[1])},
-        {"table": "result_df", "rows_full": int(gtm_dataset.result_df.shape[0]), "rows_filtered": int(gtm_dataset.result_df.shape[0]), "columns": int(gtm_dataset.result_df.shape[1])},
-        {"table": "factor_analysis_df", "rows_full": int(gtm_dataset.factor_analysis_df.shape[0]), "rows_filtered": int(gtm_dataset.factor_analysis_df.shape[0]), "columns": int(gtm_dataset.factor_analysis_df.shape[1])},
-    ]
+    rows = []
+    for table in sorted(TABLE_ANALYSIS_TABLES):
+        full = _load_table_frame(table, {})
+        filtered = _load_table_frame(table, filters)
+        rows.append({"table": table, "rows_full": int(full.shape[0]), "rows_filtered": int(filtered.shape[0]), "columns": int(full.shape[1])})
     return ToolResult(
         tool="dataset_overview",
         title="Обзор доступных таблиц",
@@ -263,6 +288,170 @@ def dataset_overview(params: dict[str, Any]) -> ToolResult:
         chart=None,
         notes=_filter_notes(filters),
     )
+
+
+@lru_cache(maxsize=1)
+def table_schema_summary() -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for table in sorted(TABLE_ANALYSIS_TABLES):
+        try:
+            df = _load_table_frame(table, {})
+            summary[table] = {"rows": int(df.shape[0]), "columns": list(map(str, df.columns[:40]))}
+        except Exception as exc:
+            summary[table] = {"error": str(exc)}
+    return summary
+
+
+def table_analysis(params: dict[str, Any]) -> ToolResult:
+    table = str(params.get("table") or "yearly").strip()
+    if table not in TABLE_ANALYSIS_TABLES:
+        table = "yearly"
+    filters = params.get("filters") if isinstance(params.get("filters"), dict) else {}
+    df = _load_table_frame(table, filters)
+    df = _apply_where_filters(df, params.get("where"))
+    source_rows = int(df.shape[0])
+    group_by = _valid_columns(df, params.get("group_by"), max_count=5)
+    metrics = _normalize_table_metrics(df, params.get("metrics"))
+
+    if group_by and metrics:
+        work_df = df.copy()
+        for metric in metrics:
+            if metric["agg"] not in {"count", "nunique"}:
+                work_df[metric["column"]] = pd.to_numeric(work_df[metric["column"]], errors="coerce")
+        named_aggs = {metric["alias"]: (metric["column"], metric["agg"]) for metric in metrics}
+        result_df = work_df.groupby(group_by, dropna=False).agg(**named_aggs).reset_index()
+    elif metrics:
+        values = {}
+        for metric in metrics:
+            series = df[metric["column"]]
+            values[metric["alias"]] = _aggregate_series(series, metric["agg"])
+        result_df = pd.DataFrame([values])
+    else:
+        display_cols = _valid_columns(df, params.get("columns"), max_count=20) or list(df.columns[:20])
+        result_df = df[display_cols].copy()
+
+    sort_by = str(params.get("sort_by") or "").strip()
+    if sort_by in result_df.columns:
+        result_df = result_df.sort_values(sort_by, ascending=not bool(params.get("sort_desc", True)), na_position="last")
+    limit = _safe_limit(params.get("limit"), default=50, maximum=200)
+    result_df = result_df.head(limit).replace({np.nan: None})
+    rows = _clean_rows(result_df.to_dict("records"))
+    columns = list(map(str, result_df.columns))
+    return ToolResult(
+        tool="table_analysis",
+        title=f"Табличный анализ: {table}",
+        chart_type="table",
+        rows=rows,
+        columns=columns,
+        summary={
+            "table": table,
+            "source_rows": source_rows,
+            "row_count": len(rows),
+            "group_by": group_by,
+            "metrics": metrics,
+            "sort_by": sort_by or None,
+            "limit": limit,
+        },
+        chart=None,
+        notes=_filter_notes(filters),
+    )
+
+
+def _load_table_frame(table: str, filters: dict[str, Any]) -> pd.DataFrame:
+    if table == "monthly_raw":
+        return _apply_common_filters(pd.read_parquet(settings.parquet_monthly_path), filters, area_col=AREA_COL_MONTH)
+    if table == "yearly_raw":
+        return _apply_common_filters(pd.read_parquet(settings.parquet_yearly_path), filters, area_col=AREA_COL_YEAR)
+    if table == "yearly":
+        return _filtered_year_data(filters)
+    dataset = gtm_analysis.get_gtm_dataset()
+    if table == "gtm_level":
+        return _filtered_gtm(filters)
+    frame = getattr(dataset, table)
+    return _apply_common_filters(frame.copy(), filters, area_col="plosh" if "plosh" in frame.columns else AREA_COL_YEAR)
+
+
+def _apply_common_filters(df: pd.DataFrame, filters: dict[str, Any], area_col: str) -> pd.DataFrame:
+    out = df.copy()
+    mest = normalize_filter_values(filters.get("mest") or filters.get("selected_mest") or ())
+    ngdu = normalize_filter_values(filters.get("ngdu") or filters.get("selected_ngdu") or ())
+    areas = normalize_filter_values(filters.get("areas") or filters.get("plosh") or filters.get("selected_areas") or ())
+    if mest and MEST_COL in out.columns:
+        out = out[out[MEST_COL].isin(mest)]
+    if ngdu and "ngdu" in out.columns:
+        out = out[out["ngdu"].isin(ngdu)]
+    if areas and area_col in out.columns:
+        out = out[out[area_col].isin(areas)]
+    return out.reset_index(drop=True)
+
+
+def _apply_where_filters(df: pd.DataFrame, where: Any) -> pd.DataFrame:
+    if not isinstance(where, dict):
+        return df
+    out = df
+    for column, raw_values in where.items():
+        if column not in out.columns:
+            continue
+        values = _selected_values(raw_values)
+        if values:
+            out = out[out[column].isin(values)]
+    return out
+
+
+def _valid_columns(df: pd.DataFrame, columns: Any, max_count: int) -> list[str]:
+    values = _selected_values(columns)
+    valid = []
+    for value in values:
+        column = str(value)
+        if column in df.columns and column not in valid:
+            valid.append(column)
+        if len(valid) >= max_count:
+            break
+    return valid
+
+
+def _normalize_table_metrics(df: pd.DataFrame, metrics: Any) -> list[dict[str, str]]:
+    normalized = []
+    if not isinstance(metrics, list):
+        return normalized
+    for item in metrics[:8]:
+        if not isinstance(item, dict):
+            continue
+        column = str(item.get("column") or "").strip()
+        agg = str(item.get("agg") or "sum").strip().lower()
+        if column not in df.columns or agg not in TABLE_ANALYSIS_AGGS:
+            continue
+        alias = str(item.get("alias") or f"{column}_{agg}").strip()
+        alias = re.sub(r"[^0-9A-Za-zА-Яа-я_]+", "_", alias)[:64] or f"{column}_{agg}"
+        normalized.append({"column": column, "agg": agg, "alias": alias})
+    return normalized
+
+
+def _aggregate_series(series: pd.Series, agg: str) -> Any:
+    if agg == "count":
+        return int(series.count())
+    if agg == "nunique":
+        return int(series.nunique(dropna=True))
+    numeric = pd.to_numeric(series, errors="coerce")
+    if agg == "sum":
+        return numeric.sum(skipna=True)
+    if agg == "mean":
+        return numeric.mean(skipna=True)
+    if agg == "median":
+        return numeric.median(skipna=True)
+    if agg == "min":
+        return numeric.min(skipna=True)
+    if agg == "max":
+        return numeric.max(skipna=True)
+    return None
+
+
+def _safe_limit(value: Any, default: int, maximum: int) -> int:
+    try:
+        limit = int(value)
+    except Exception:
+        limit = default
+    return max(1, min(limit, maximum))
 
 
 def metric_dynamics(params: dict[str, Any]) -> ToolResult:

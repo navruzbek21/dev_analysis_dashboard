@@ -216,3 +216,15 @@ In `Режим → Анализ данных`, the console now sends the current
 This matters for requests such as `проанализируй эффективность ГТМ по текущему срезу` or `эффективность ГТМ по НГДУ 30`: the backend enriches the LLM-generated plan with the active dashboard filters and also recognizes explicit `НГДУ <номер>` mentions in the text. For GTM tables, where the parquet source is keyed by area rather than directly by `ngdu`, the backend maps the selected NGDU to its available areas before running the GTM aggregation.
 
 The LLM does not receive raw parquet files directly. Instead, it selects one of the safe analytical tools and receives aggregated rows/summaries from the backend. To ask what data is available across the source parquet tables, use a request like `какие исходные таблицы доступны и сколько строк в текущем срезе?`; this uses the `dataset_overview` tool and reports full vs filtered row counts for the loaded yearly and GTM parquet datasets. To let the LLM perform arbitrary analysis over new raw tables, add a dedicated tool in `analytics_tools.py` rather than exposing unrestricted file access.
+
+#### Arbitrary table analysis tool
+
+For broader questions, `Режим → Анализ данных` can use the safe `table_analysis` backend tool. It is deliberately not a Python/SQL execution sandbox. The LLM may choose a table, dashboard filters, equality filters, up to five grouping columns, up to eight aggregations (`sum`, `mean`, `median`, `min`, `max`, `count`, `nunique`), sorting, and a capped row limit. The backend validates every table, column, aggregation, and limit before running pandas operations.
+
+Available table names are: `monthly_raw`, `yearly_raw`, `yearly`, `gtm_level`, `result_df`, and `factor_analysis_df`. Example user requests:
+
+- `Сгруппируй исходные месячные данные по ngdu и посчитай средний debit_neft за текущий срез`
+- `Покажи топ-10 площадей по суммарной добыче нефти в yearly`
+- `По таблице gtm_level сравни средний Δqoil по направлениям ГТМ`
+
+If a new parquet dataset should be analyzable, add it to `TABLE_ANALYSIS_TABLES` and `_load_table_frame()` in `analytics_tools.py`, then describe the expected columns in tests.
