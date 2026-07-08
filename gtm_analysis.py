@@ -35,6 +35,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+from normalization import ALL_BLOCK_VALUE
+from services import data_service
+
 # -----------------------------------------------------------------------------
 # Константы визуализации
 # -----------------------------------------------------------------------------
@@ -549,6 +552,7 @@ def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
         направление=("направление", "first") if "направление" in df.columns else ("gtm_year", lambda _s: np.nan),
         mest=("mest", "first") if "mest" in df.columns else ("gtm_year", lambda _s: np.nan),
         plosh=("plosh", "first") if "plosh" in df.columns else ("gtm_year", lambda _s: np.nan),
+        block=("block", "first") if "block" in df.columns else ("gtm_year", lambda _s: "all"),
     ).reset_index()
     gtm_level["назначение"] = gtm_level["назначение"].fillna("Не указано")
 
@@ -596,22 +600,27 @@ def precompute_gtm_level(df: pd.DataFrame) -> pd.DataFrame:
             "направление",
             "mest",
             "plosh",
+            "block",
             "effective",
             "effective_plan",
         ]
     ]
 
-def filter_df(df: pd.DataFrame, direction=ALL, plosh=ALL, mest=ALL) -> pd.DataFrame:
+def filter_df(df: pd.DataFrame, direction=ALL, plosh=ALL, mest=ALL, block=ALL_BLOCK_VALUE) -> pd.DataFrame:
     mask = pd.Series(True, index=df.index)
     direction_values = _selected_values(direction)
     plosh_values = _selected_values(plosh)
     mest_values = _selected_values(mest)
+    block_values = _selected_values(block)
     if direction_values and "направление" in df.columns:
         mask &= df["направление"].isin(direction_values)
     if plosh_values and "plosh" in df.columns:
         mask &= df["plosh"].isin(plosh_values)
     if mest_values and "mest" in df.columns:
         mask &= df["mest"].isin(mest_values)
+    if block_values and "block" in df.columns:
+        block_text = df["block"].astype(str).str.strip()
+        mask &= block_text.isin([str(value).strip() for value in block_values])
     return df.loc[mask]
 
 
@@ -1008,11 +1017,12 @@ def fig_cumulative_dynamics(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def prepare_hist_data(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None = None, mest=ALL) -> pd.DataFrame:
+def prepare_hist_data(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None = None, mest=ALL, block=ALL_BLOCK_VALUE) -> pd.DataFrame:
     """Данные для stacked bar: базовая добыча + доп. добыча по направлениям."""
     dataset = dataset or get_gtm_dataset()
     plosh_values = _selected_values(plosh)
     mest_values = _selected_values(mest)
+    block_values = _selected_values(block)
     prod = dataset.df_ploshad_year.copy()
     if prod.empty:
         return pd.DataFrame(columns=["year", "Категория", "Добыча нефти, тонн"])
@@ -1020,6 +1030,14 @@ def prepare_hist_data(plosh=ALL, hist_type="traditional", dataset: GtmDataset | 
         prod = prod[prod["mest"].isin(mest_values)]
     if plosh_values and "kod_ploshchadi" in prod.columns:
         prod = prod[prod["kod_ploshchadi"].isin(plosh_values)]
+    if "block" in prod.columns:
+        block_text = prod["block"].astype(str).str.strip()
+        if block_values:
+            prod = prod[block_text.isin([str(value).strip() for value in block_values])]
+        else:
+            area_level = prod["block"].isna() | block_text.str.lower().isin(["", "all"])
+            if area_level.any():
+                prod = prod[area_level]
     if "year" not in prod.columns or "dobycha_nefti" not in prod.columns:
         return pd.DataFrame(columns=["year", "Категория", "Добыча нефти, тонн"])
     prod = prod.groupby("year", as_index=False)["dobycha_nefti"].sum()
@@ -1034,6 +1052,8 @@ def prepare_hist_data(plosh=ALL, hist_type="traditional", dataset: GtmDataset | 
         gtm = gtm[gtm["plosh"].isin(plosh_values)]
     if mest_values and "mest" in gtm.columns:
         gtm = gtm[gtm["mest"].isin(mest_values)]
+    if block_values and "block" in gtm.columns:
+        gtm = gtm[gtm["block"].astype(str).str.strip().isin([str(value).strip() for value in block_values])]
 
     if hist_type == "traditional" and "gtm_year" in gtm.columns:
         gtm = gtm[gtm["gtm_year"].eq(gtm["year"])]
@@ -1057,8 +1077,8 @@ def prepare_hist_data(plosh=ALL, hist_type="traditional", dataset: GtmDataset | 
     )
 
 
-def fig_histogram(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None = None, mest=ALL) -> go.Figure:
-    data = prepare_hist_data(plosh, hist_type, dataset, mest)
+def fig_histogram(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None = None, mest=ALL, block=ALL_BLOCK_VALUE) -> go.Figure:
+    data = prepare_hist_data(plosh, hist_type, dataset, mest, block)
     data = data[data["Добыча нефти, тонн"].notna()].copy()
 
     # Гистограмма только с 2020 года
@@ -1123,7 +1143,7 @@ def make_bad_gtm_table(gtm_level: pd.DataFrame) -> tuple[list[dict], list[dict]]
     return data, columns
 
 
-def fig_boxplot_factors(direction=ALL, plosh=ALL, dataset: GtmDataset | None = None, mest=ALL) -> go.Figure:
+def fig_boxplot_factors(direction=ALL, plosh=ALL, dataset: GtmDataset | None = None, mest=ALL, block=ALL_BLOCK_VALUE) -> go.Figure:
     dataset = dataset or get_gtm_dataset()
     df = dataset.factor_analysis_df.copy()
     if df.empty:
@@ -1131,6 +1151,7 @@ def fig_boxplot_factors(direction=ALL, plosh=ALL, dataset: GtmDataset | None = N
     direction_values = _selected_values(direction)
     plosh_values = _selected_values(plosh)
     mest_values = _selected_values(mest)
+    block_values = _selected_values(block)
 
     if direction_values and "направление" in df.columns:
         df = df[df["направление"].isin(direction_values)]
@@ -1140,6 +1161,8 @@ def fig_boxplot_factors(direction=ALL, plosh=ALL, dataset: GtmDataset | None = N
 
     if mest_values and "mest" in df.columns:
         df = df[df["mest"].isin(mest_values)]
+    if block_values and "block" in df.columns:
+        df = df[df["block"].astype(str).str.strip().isin([str(value).strip() for value in block_values])]
 
     available = [c for c in FACTOR_COLS if c in df.columns]
     if not available or df.empty:
@@ -1176,9 +1199,9 @@ def fig_boxplot_factors(direction=ALL, plosh=ALL, dataset: GtmDataset | None = N
 
 
 
-def make_well_options(direction=ALL, plosh=ALL, dataset: GtmDataset | None = None, mest=ALL) -> list[dict]:
+def make_well_options(direction=ALL, plosh=ALL, dataset: GtmDataset | None = None, mest=ALL, block=ALL_BLOCK_VALUE) -> list[dict]:
     dataset = dataset or get_gtm_dataset()
-    df = filter_df(dataset.result_df, direction, plosh, mest)
+    df = filter_df(dataset.result_df, direction, plosh, mest, block)
     if "well" not in df.columns or df.empty:
         return []
 
@@ -1367,6 +1390,18 @@ def layout():
                                     value=EFFICIENCY_DELTA,
                                     clearable=False,
                                     persistence=True,
+                                ),
+                            ],
+                            md=4,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Блок/участок площади"),
+                                dcc.Dropdown(
+                                    id=cid("block-filter"),
+                                    options=[{"label": "Вся площадь", "value": ALL_BLOCK_VALUE}],
+                                    value=ALL_BLOCK_VALUE,
+                                    clearable=False,
                                 ),
                             ],
                             md=4,
@@ -1598,6 +1633,21 @@ def layout():
 
 def register_callbacks(app):
     @app.callback(
+        Output(cid("block-filter"), "options"),
+        Output(cid("block-filter"), "value"),
+        Input("ngdu-filter", "value"),
+        Input("area-filter", "value"),
+        Input("mest-filter", "value"),
+    )
+    def update_gtm_block_options(ngdu=ALL, plosh=ALL, mest=ALL):
+        ngdu_values = _selected_values(ngdu)
+        plosh_values = _selected_values(plosh)
+        mest_values = _selected_values(mest)
+        blocks = data_service.get_block_options(ngdu_values, plosh_values, mest_values)
+        options = [{"label": "Вся площадь", "value": ALL_BLOCK_VALUE}] + [{"label": f"Блок {block}", "value": block} for block in blocks]
+        return options, ALL_BLOCK_VALUE
+
+    @app.callback(
         Output(cid("kpi-row"), "children"),
         Output(cid("prod-direction-counts"), "figure"),
         Output(cid("inj-direction-counts"), "figure"),
@@ -1610,14 +1660,15 @@ def register_callbacks(app):
         Output(cid("boxplot-factors"), "figure"),
         Input(cid("direction-filter"), "value"),
         Input(cid("efficiency-algorithm"), "value"),
+        Input(cid("block-filter"), "value"),
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
         Input("theme-store", "data"),
     )
-    def update_dashboard(direction=ALL, efficiency_algorithm=EFFICIENCY_DELTA, plosh=ALL, mest=ALL, theme="light"):
+    def update_dashboard(direction=ALL, efficiency_algorithm=EFFICIENCY_DELTA, block=ALL_BLOCK_VALUE, plosh=ALL, mest=ALL, theme="light"):
         dataset = get_gtm_dataset()
-        filtered_result = filter_df(dataset.result_df, direction, plosh, mest)
-        filtered_gtm = apply_efficiency_algorithm(filter_df(dataset.gtm_level, direction, plosh, mest), efficiency_algorithm)
+        filtered_result = filter_df(dataset.result_df, direction, plosh, mest, block)
+        filtered_gtm = apply_efficiency_algorithm(filter_df(dataset.gtm_level, direction, plosh, mest, block), efficiency_algorithm)
         direction_values = _selected_values(direction)
 
         table_data, table_columns = make_bad_gtm_table(filtered_gtm)
@@ -1638,18 +1689,19 @@ def register_callbacks(app):
             apply_runtime_theme(fig_cumulative_dynamics(filtered_result), theme),
             table_data,
             table_columns,
-            apply_runtime_theme(fig_boxplot_factors(direction, plosh, dataset, mest), theme),
+            apply_runtime_theme(fig_boxplot_factors(direction, plosh, dataset, mest, block), theme),
         )
 
     @app.callback(
         Output(cid("graph-5"), "figure"),
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
+        Input(cid("block-filter"), "value"),
         Input(cid("hist-type-filter"), "value"),
         Input("theme-store", "data"),
     )
-    def update_histogram(plosh=ALL, mest=ALL, hist_type="traditional", theme="light"):
-        return apply_runtime_theme(fig_histogram(plosh, hist_type, get_gtm_dataset(), mest), theme)
+    def update_histogram(plosh=ALL, mest=ALL, block=ALL_BLOCK_VALUE, hist_type="traditional", theme="light"):
+        return apply_runtime_theme(fig_histogram(plosh, hist_type, get_gtm_dataset(), mest, block), theme)
 
     @app.callback(
         Output(cid("well-history-filter"), "options"),
@@ -1657,10 +1709,11 @@ def register_callbacks(app):
         Input(cid("direction-filter"), "value"),
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
+        Input(cid("block-filter"), "value"),
     )
-    def update_well_history_options(direction=ALL, plosh=ALL, mest=ALL):
+    def update_well_history_options(direction=ALL, plosh=ALL, mest=ALL, block=ALL_BLOCK_VALUE):
         dataset = get_gtm_dataset()
-        options = make_well_options(direction, plosh, dataset, mest)
+        options = make_well_options(direction, plosh, dataset, mest, block)
         value = options[0]["value"] if options else None
         return options, value
 
