@@ -111,3 +111,55 @@ def test_table_analysis_rejects_unknown_columns_and_caps_limit(monkeypatch):
 
     assert result.columns == ["year", "value"]
     assert result.summary["limit"] == 200
+
+
+def test_apply_dashboard_context_infers_area_from_user_text(monkeypatch):
+    import analytics_tools
+
+    monkeypatch.setattr(analytics_tools.data_service, "get_area_options", lambda ngdu, mest: ["Альметьевская", "Березовская"])
+    plan = {"tool": "metric_dynamics", "params": {"metric": "dobycha_nefti", "filters": {}}}
+
+    enriched = analytics_tools.apply_dashboard_context(plan, "Добыча нефти по Альметьевской площади за последний год", {})
+
+    assert enriched["params"]["filters"]["areas"] == ["Альметьевская"]
+
+
+def test_apply_dashboard_context_infers_area_from_gtm_options_when_yearly_filter_options_empty(monkeypatch):
+    import pandas as pd
+    import analytics_tools
+
+    class Dataset:
+        gtm_level = pd.DataFrame({"plosh": ["Альметьевская"], "направление": ["ГРП"]})
+        result_df = pd.DataFrame({"plosh": ["Альметьевская"], "направление": ["ГРП"]})
+
+    monkeypatch.setattr(analytics_tools.data_service, "get_area_options", lambda ngdu, mest: [])
+    monkeypatch.setattr(analytics_tools.gtm_analysis, "get_gtm_dataset", lambda: Dataset())
+    plan = {"tool": "gtm_efficiency", "params": {"filters": {}}}
+
+    enriched = analytics_tools.apply_dashboard_context(
+        plan,
+        "привет, проанализируй эффективность ГРП по Альметьевской площади",
+        {"ngdu": ["НГДУ без этой площади"]},
+    )
+
+    assert enriched["params"]["filters"]["areas"] == ["Альметьевская"]
+    assert enriched["params"]["filters"]["direction"] == "ГРП"
+
+
+def test_gtm_efficiency_empty_result_explanation_is_not_zero_success_message():
+    import analytics_tools
+
+    result = analytics_tools.ToolResult(
+        tool="gtm_efficiency",
+        title="Эффективность ГТМ",
+        chart_type="bar",
+        rows=[],
+        columns=[],
+        summary={"gtm_count": 0, "efficiency_pct": 0.0, "avg_delta_oil": 0.0},
+        notes=["Площади: Альметьевская", "Направление: ГРП"],
+    )
+
+    message = analytics_tools.fallback_explanation("эффективность ГРП", result)
+
+    assert "нет строк ГТМ" in message
+    assert "В выборке 0 ГТМ" not in message
