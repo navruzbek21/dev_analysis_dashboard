@@ -1441,10 +1441,19 @@ def run_analysis(text: str, model: str, dashboard_filters: dict | None = None) -
     if not plan:
         plan = analytics_tools.fallback_plan(text)
 
+    base_plan = plan
     plan = analytics_tools.apply_dashboard_context(plan, text, dashboard_filters)
     result = analytics_tools.execute_plan(plan)
+    if analytics_tools.requires_deterministic_explanation(result) and analytics_tools.has_selected_dashboard_filters(dashboard_filters):
+        fallback_result = analytics_tools.execute_plan(base_plan)
+        if not analytics_tools.requires_deterministic_explanation(fallback_result):
+            result = analytics_tools.with_note(
+                fallback_result,
+                "Фильтры текущего дашборда не дали строк; показан срез без этих фильтров, как в исходном режиме анализа.",
+            )
+            plan = base_plan
     explanation = None
-    if SERVER_TOKEN.strip():
+    if not analytics_tools.requires_deterministic_explanation(result) and SERVER_TOKEN.strip():
         explanation = litellm_prompt(analytics_tools.make_explanation_prompt(text, plan, result), model)
     if not explanation:
         explanation = analytics_tools.fallback_explanation(text, result)
