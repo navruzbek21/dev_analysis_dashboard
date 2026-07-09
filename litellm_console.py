@@ -1444,7 +1444,7 @@ def run_analysis(text: str, model: str, dashboard_filters: dict | None = None) -
     plan = analytics_tools.apply_dashboard_context(plan, text, dashboard_filters)
     result = analytics_tools.execute_plan(plan)
     explanation = None
-    if SERVER_TOKEN.strip():
+    if not analytics_tools.requires_deterministic_explanation(result) and SERVER_TOKEN.strip():
         explanation = litellm_prompt(analytics_tools.make_explanation_prompt(text, plan, result), model)
     if not explanation:
         explanation = analytics_tools.fallback_explanation(text, result)

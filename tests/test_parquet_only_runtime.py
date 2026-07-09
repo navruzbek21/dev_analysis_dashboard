@@ -111,3 +111,14 @@ def test_table_analysis_rejects_unknown_columns_and_caps_limit(monkeypatch):
 
     assert result.columns == ["year", "value"]
     assert result.summary["limit"] == 200
+
+
+def test_apply_dashboard_context_infers_area_from_user_text(monkeypatch):
+    import analytics_tools
+
+    monkeypatch.setattr(analytics_tools.data_service, "get_area_options", lambda ngdu, mest: ["Альметьевская", "Березовская"])
+    plan = {"tool": "metric_dynamics", "params": {"metric": "dobycha_nefti", "filters": {}}}
+
+    enriched = analytics_tools.apply_dashboard_context(plan, "Добыча нефти по Альметьевской площади за последний год", {})
+
+    assert enriched["params"]["filters"]["areas"] == ["Альметьевская"]

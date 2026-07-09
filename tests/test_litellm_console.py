@@ -132,3 +132,34 @@ def test_run_analysis_passes_dashboard_filters(monkeypatch):
 
     assert any("Текущие фильтры дашборда" in prompt for prompt in captured["prompts"])
     assert captured["filters"] == {"ngdu": ["НГДУ 30"]}
+
+
+def test_run_analysis_uses_deterministic_explanation_for_empty_data(monkeypatch):
+    captured = {"explanation_prompts": 0}
+
+    def fake_prompt(prompt, model):
+        if "Ты аналитик нефтяного дашборда" in prompt:
+            captured["explanation_prompts"] += 1
+            return "На основе предоставленных данных можно сделать вывод, что данные не отражены."
+        return '{"tool":"metric_dynamics","params":{"metric":"dobycha_nefti","filters":{}},"explain":true}'
+
+    def fake_execute(plan):
+        return litellm_console.analytics_tools.ToolResult(
+            tool="metric_dynamics",
+            title="Динамика: Добыча нефти",
+            chart_type="line",
+            rows=[],
+            columns=["year", "value", "change_pct"],
+            summary={"metric_label": "Добыча нефти", "last_year": None, "last_value": None, "last_change_pct": None},
+            notes=["Площади: Альметьевская"],
+        )
+
+    monkeypatch.setattr(litellm_console, "SERVER_TOKEN", "token")
+    monkeypatch.setattr(litellm_console, "litellm_prompt", fake_prompt)
+    monkeypatch.setattr(litellm_console.analytics_tools, "execute_plan", fake_execute)
+
+    payload = litellm_console.run_analysis("добыча нефти за последний год по Альметьевской площади", "model-a")
+
+    assert captured["explanation_prompts"] == 0
+    assert "нет строк" in payload["message"]
+    assert "Альметьевская" in payload["message"]
