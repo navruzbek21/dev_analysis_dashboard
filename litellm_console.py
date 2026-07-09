@@ -1431,20 +1431,26 @@ def litellm_prompt(prompt: str, model: str) -> str | None:
 
 
 def run_analysis(text: str, model: str, dashboard_filters: dict | None = None) -> dict:
-    plan_source = "fallback"
-    plan = None
+    raw_llm_plan = None
     plan_answer = litellm_prompt(analytics_tools.make_plan_prompt(text, dashboard_filters), model)
     if plan_answer:
-        plan = analytics_tools.parse_plan(plan_answer)
-        if plan:
-            plan_source = "litellm"
-    if not plan:
-        plan = analytics_tools.fallback_plan(text)
+        raw_llm_plan = analytics_tools.parse_plan(plan_answer)
 
-    plan = analytics_tools.apply_dashboard_context(plan, text, dashboard_filters)
+    plan, plan_source = analytics_tools.make_analysis_plan(text, dashboard_filters, raw_llm_plan)
     result = analytics_tools.execute_plan(plan)
+
+    if analytics_tools.requires_deterministic_explanation(result) and analytics_tools.has_selected_dashboard_filters(dashboard_filters):
+        base_plan, _base_source = analytics_tools.make_analysis_plan(text, None, raw_llm_plan)
+        fallback_result = analytics_tools.execute_plan(base_plan)
+        if not analytics_tools.requires_deterministic_explanation(fallback_result):
+            result = analytics_tools.with_note(
+                fallback_result,
+                "Фильтры текущего дашборда не дали строк; показан срез без этих фильтров.",
+            )
+            plan = base_plan
+
     explanation = None
-    if SERVER_TOKEN.strip():
+    if not analytics_tools.requires_deterministic_explanation(result) and SERVER_TOKEN.strip():
         explanation = litellm_prompt(analytics_tools.make_explanation_prompt(text, plan, result), model)
     if not explanation:
         explanation = analytics_tools.fallback_explanation(text, result)

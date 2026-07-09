@@ -147,6 +147,80 @@ def fallback_plan(user_text: str) -> dict[str, Any]:
     return {"tool": "metric_dynamics", "params": {"metric": metric, "filters": {}}, "explain": True}
 
 
+def make_analysis_plan(user_text: str, dashboard_filters: dict[str, Any] | None = None, llm_plan: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
+    text = (user_text or "").lower()
+    source = "rules"
+    if isinstance(llm_plan, dict) and str(llm_plan.get("tool") or "") in ALLOWED_TOOLS:
+        plan = {"tool": llm_plan.get("tool"), "params": dict(llm_plan.get("params") if isinstance(llm_plan.get("params"), dict) else {}), "explain": True}
+        source = "litellm"
+    else:
+        plan = _rule_based_plan(text)
+
+    params = plan.get("params") if isinstance(plan.get("params"), dict) else {}
+    params = dict(params)
+    params["filters"] = _analysis_filters(user_text, dashboard_filters, params.get("filters"))
+    plan["params"] = params
+    return _normalize_plan(plan), source
+
+
+def _rule_based_plan(text: str) -> dict[str, Any]:
+    metric = _infer_metric(text)
+    if any(word in text for word in ["гтм", "грп", "гидроразрыв", "операц", "эффект", "успеш", "прирост"]):
+        if any(word in text for word in ["структур", "доп", "дополнитель", "гист", "stack", "стек"]):
+            hist_type = "cumulative" if any(word in text for word in ["кумуля", "накоп"]) else "traditional"
+            return {"tool": "gtm_structure", "params": {"hist_type": hist_type}, "explain": True}
+        return {"tool": "gtm_efficiency", "params": {}, "explain": True}
+    if any(word in text for word in ["сгрупп", "топ", "top", "сумм", "средн", "максим", "миним", "разрез", "по год", "по нгду", "по площад"]):
+        return {"tool": "table_analysis", "params": {"table": "yearly", "group_by": ["year"], "metrics": [{"column": metric, "agg": "sum"}], "limit": 50}, "explain": True}
+    if any(word in text for word in ["таблиц", "исходн", "датасет"]):
+        return {"tool": "dataset_overview", "params": {}, "explain": True}
+    if any(word in text for word in ["измен", "сравн", "прошл", "прирост", "паден", "сниз", "рост"]):
+        period = "5y" if "5" in text else ("3y" if "3" in text else "prev")
+        return {"tool": "metric_change", "params": {"metric": metric, "period": period}, "explain": True}
+    return {"tool": "metric_dynamics", "params": {"metric": metric}, "explain": True}
+
+
+def _analysis_filters(user_text: str, dashboard_filters: dict[str, Any] | None, initial_filters: Any = None) -> dict[str, Any]:
+    filters = dict(initial_filters) if isinstance(initial_filters, dict) else {}
+    context = dashboard_filters if isinstance(dashboard_filters, dict) else {}
+    explicit_ngdu = _infer_ngdu_values(user_text)
+    explicit_areas = _infer_area_values(user_text, {**context, **filters})
+    explicit_directions = _infer_direction_values(user_text)
+
+    if explicit_areas:
+        filters = {key: value for key, value in filters.items() if key in {"where"}}
+        filters["areas"] = explicit_areas
+        if explicit_ngdu:
+            filters["ngdu"] = explicit_ngdu
+    elif explicit_ngdu:
+        filters["ngdu"] = explicit_ngdu
+        if _selected_values(context.get("mest")):
+            filters["mest"] = context.get("mest")
+    else:
+        for key in ["mest", "ngdu", "areas", "block"]:
+            if not _selected_values(filters.get(key)) and _selected_values(context.get(key)):
+                filters[key] = context.get(key)
+
+    if explicit_directions:
+        filters["direction"] = explicit_directions[0] if len(explicit_directions) == 1 else explicit_directions
+    elif _selected_values(context.get("direction")) and not _selected_values(filters.get("direction")):
+        filters["direction"] = context.get("direction")
+    return {key: value for key, value in filters.items() if _selected_values(value)}
+
+
+def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    tool = str(plan.get("tool") or "metric_dynamics")
+    if tool not in ALLOWED_TOOLS:
+        tool = "metric_dynamics"
+    params = plan.get("params") if isinstance(plan.get("params"), dict) else {}
+    params = dict(params)
+    if tool in {"metric_dynamics", "metric_change"}:
+        params["metric"] = _validate_metric(params.get("metric"))
+    if tool == "metric_change" and params.get("period") not in CHANGE_PERIODS:
+        params["period"] = "prev"
+    return {"tool": tool, "params": params, "explain": bool(plan.get("explain", True))}
+
+
 def execute_plan(plan: dict[str, Any]) -> ToolResult:
     tool = str(plan.get("tool") or "").strip()
     if tool not in ALLOWED_TOOLS:
@@ -171,7 +245,10 @@ def make_explanation_prompt(user_text: str, plan: dict[str, Any], result: ToolRe
     rows_preview = result.rows[:30]
     return (
         "Ты аналитик нефтяного дашборда. Дай короткий вывод на русском языке. "
-        "Опирайся только на агрегированные данные ниже. Не выдумывай причин, если они не следуют из данных. "
+        "Опирайся только на агрегированные данные ниже. Обязательно укажи конкретные числа/годы из строк или сводки. "
+        "Если строк нет или source_rows=0, прямо напиши, что в выбранном срезе нет строк, и не делай содержательный вывод. "
+        "Не пиши общие фразы вроде «не была отражена в агрегированных данных» без указания фильтров и количества строк. "
+        "Не выдумывай причин, если они не следуют из данных. "
         "Структура: 2-4 предложения, затем 1-3 пункта что проверить дальше.\n\n"
         f"Запрос пользователя: {user_text}\n"
         f"План: {plan}\n"
@@ -181,14 +258,24 @@ def make_explanation_prompt(user_text: str, plan: dict[str, Any], result: ToolRe
     )
 
 
+def requires_deterministic_explanation(result: ToolResult) -> bool:
+    if not result.rows:
+        return True
+    source_rows = result.summary.get("source_rows") if isinstance(result.summary, dict) else None
+    return source_rows == 0
+
+
 def fallback_explanation(user_text: str, result: ToolResult) -> str:
     summary = result.summary
     if result.tool in {"metric_dynamics", "metric_change"}:
         label = summary.get("metric_label", "Показатель")
         current = summary.get("last_value")
         change = summary.get("last_change_pct")
+        if not result.rows:
+            filters = "; ".join(result.notes or []) or "без фильтров"
+            return f"В выбранном срезе ({filters}) нет строк для расчета показателя «{label}». Проверьте выбранную площадь/НГДУ/месторождение и наличие данных за нужный период."
         if change is None or not np.isfinite(change):
-            return f"Построил агрегированный срез по показателю «{label}». Недостаточно базы сравнения для корректного процента изменения."
+            return f"Построил агрегированный срез по показателю «{label}»: последнее значение {_fmt_number(current)} за {summary.get('last_year') or 'последний доступный год'}. Недостаточно базы сравнения для корректного процента изменения."
         direction = "вырос" if change > 0 else ("снизился" if change < 0 else "не изменился")
         return (
             f"Показатель «{label}» в последнем доступном году {direction} на {change:+.1f}% к базе сравнения. "
@@ -203,11 +290,21 @@ def fallback_explanation(user_text: str, result: ToolResult) -> str:
             "Для интерпретации стоит сравнить вклад направлений ГТМ с базовой добычей по годам."
         )
     if result.tool == "table_analysis":
+        if not result.rows or summary.get("source_rows") == 0:
+            filters = "; ".join(result.notes or []) or "без фильтров"
+            return (
+                f"В выбранном срезе ({filters}) табличный анализ не нашел строк: "
+                f"получено {summary.get('row_count', 0)} строк из {summary.get('source_rows', 0)} строк источника. "
+                "Проверьте точное название площади/НГДУ и доступность данных за нужный период."
+            )
         return (
             f"Выполнил табличный анализ: получено {summary.get('row_count', 0)} строк из {summary.get('source_rows', 0)} строк источника. "
             f"Таблица: {summary.get('table')}; группировка: {summary.get('group_by') or 'без группировки'}."
         )
     if result.tool == "gtm_efficiency":
+        if not result.rows or summary.get("gtm_count", 0) == 0:
+            filters = "; ".join(result.notes or []) or "без фильтров"
+            return f"В выбранном срезе ({filters}) нет строк ГТМ для расчета эффективности. Проверьте направление, площадь/НГДУ и наличие ГТМ в источнике."
         return (
             f"В выборке {summary.get('gtm_count', 0)} ГТМ, доля эффективных операций {summary.get('efficiency_pct', 0):.1f}%. "
             f"Средний прирост нефти: {summary.get('avg_delta_oil', 0):+.2f} т/сут. "
@@ -236,6 +333,28 @@ def result_to_payload(result: ToolResult, explanation: str, plan: dict[str, Any]
     }
 
 
+def has_selected_dashboard_filters(dashboard_filters: dict[str, Any] | None) -> bool:
+    if not isinstance(dashboard_filters, dict):
+        return False
+    return any(_selected_values(dashboard_filters.get(key)) for key in ["mest", "ngdu", "areas", "block"])
+
+
+def with_note(result: ToolResult, note: str) -> ToolResult:
+    notes = list(result.notes or [])
+    if note not in notes:
+        notes.append(note)
+    return ToolResult(
+        tool=result.tool,
+        title=result.title,
+        chart_type=result.chart_type,
+        rows=result.rows,
+        columns=result.columns,
+        summary={**result.summary, "dashboard_filter_recovery": True},
+        chart=result.chart,
+        notes=notes,
+    )
+
+
 def apply_dashboard_context(plan: dict[str, Any], user_text: str, dashboard_filters: dict[str, Any] | None = None) -> dict[str, Any]:
     out = dict(plan or {})
     params = out.get("params") if isinstance(out.get("params"), dict) else {}
@@ -252,6 +371,20 @@ def apply_dashboard_context(plan: dict[str, Any], user_text: str, dashboard_filt
     if inferred_ngdu:
         filters["ngdu"] = inferred_ngdu
 
+    inferred_areas = _infer_area_values(user_text, filters)
+    if inferred_areas:
+        filters["areas"] = inferred_areas
+        if not inferred_ngdu:
+            filters.pop("ngdu", None)
+            filters.pop("selected_ngdu", None)
+        filters.pop("mest", None)
+        filters.pop("selected_mest", None)
+        filters.pop("block", None)
+
+    inferred_directions = _infer_direction_values(user_text)
+    if inferred_directions:
+        filters["direction"] = inferred_directions[0] if len(inferred_directions) == 1 else inferred_directions
+
     params["filters"] = filters
     out["params"] = params
     return out
@@ -261,7 +394,10 @@ def _infer_ngdu_values(text: str) -> list[str]:
     matches = re.findall(r"н\s*г\s*д\s*у[^0-9A-Za-zА-Яа-я]*(\d+)", text or "", flags=re.I)
     if not matches:
         return []
-    options = data_service.get_ngdu_options(())
+    try:
+        options = data_service.get_ngdu_options(())
+    except Exception:
+        return []
     found = []
     for number in matches:
         pattern = re.compile(rf"(?<!\d){re.escape(number)}(?!\d)")
@@ -269,6 +405,101 @@ def _infer_ngdu_values(text: str) -> list[str]:
             if pattern.search(str(option)) and option not in found:
                 found.append(option)
     return found
+
+
+def _infer_area_values(text: str, filters: dict[str, Any]) -> list[str]:
+    normalized_text = _normalize_match_text(text)
+    if not normalized_text or not any(marker in normalized_text for marker in ["площад", "площ"]):
+        return []
+    found = _match_options_by_text(_area_options_for_filters(filters), normalized_text, {"площадь", "площади", "площад", "площ"})
+    if found:
+        return found[:20]
+    unconstrained_filters = {**filters, "ngdu": [], "selected_ngdu": [], "mest": [], "selected_mest": []}
+    return _match_options_by_text(_area_options_for_filters(unconstrained_filters), normalized_text, {"площадь", "площади", "площад", "площ"})[:20]
+
+
+def _area_options_for_filters(filters: dict[str, Any]) -> list[Any]:
+    options: list[Any] = []
+    try:
+        options.extend(
+            data_service.get_area_options(
+                _selected_values(filters.get("ngdu") or filters.get("selected_ngdu")),
+                _selected_values(filters.get("mest") or filters.get("selected_mest")),
+            )
+        )
+    except Exception:
+        pass
+    try:
+        dataset = gtm_analysis.get_gtm_dataset()
+        for frame_name in ["gtm_level", "result_df"]:
+            frame = getattr(dataset, frame_name)
+            if "plosh" in frame.columns:
+                options.extend(frame["plosh"].dropna().unique().tolist())
+    except Exception:
+        pass
+    deduped: list[Any] = []
+    seen = set()
+    for option in options:
+        key = str(option)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(option)
+    return deduped
+
+
+def _infer_direction_values(text: str) -> list[str]:
+    normalized_text = _normalize_match_text(text)
+    if not normalized_text:
+        return []
+    try:
+        dataset = gtm_analysis.get_gtm_dataset()
+        options = dataset.result_df["направление"].dropna().unique().tolist() if "направление" in dataset.result_df.columns else []
+    except Exception:
+        options = []
+    aliases = {"грп": "грп", "гидроразрыв": "грп", "гидроразрыва": "грп"}
+    for source, target in aliases.items():
+        if source in normalized_text:
+            matched = _match_options_by_text(options, target, set())
+            return matched or [target.upper()]
+    return _match_options_by_text(options, normalized_text, set())[:5]
+
+
+def _match_options_by_text(options: list[Any], normalized_text: str, stop_words: set[str]) -> list[Any]:
+    scored: list[tuple[int, Any]] = []
+    query_tokens = set(normalized_text.split())
+    for option in options:
+        option_text = _normalize_match_text(option)
+        tokens = [token for token in option_text.split() if len(token) >= 3 and token not in stop_words]
+        if not option_text or not tokens:
+            continue
+        score = 0
+        if option_text in normalized_text:
+            score = len(tokens) + 10
+        elif all(token in query_tokens for token in tokens):
+            score = len(tokens)
+        if score:
+            scored.append((score, option))
+    if not scored:
+        return []
+    max_score = max(score for score, _option in scored)
+    found: list[Any] = []
+    for score, option in scored:
+        if score == max_score and option not in found:
+            found.append(option)
+    return found
+
+
+def _normalize_match_text(value: Any) -> str:
+    text = str(value or "").lower().replace("ё", "е")
+    text = re.sub(r"[^0-9a-zа-я]+", " ", text)
+    words = []
+    for word in text.split():
+        for suffix in ["ской", "ской", "ская", "ское", "ский", "ская", "ую", "ой", "ая", "ое", "ые", "ий", "ый"]:
+            if len(word) > len(suffix) + 3 and word.endswith(suffix):
+                word = word[: -len(suffix)]
+                break
+        words.append(word)
+    return " ".join(words)
 
 
 def dataset_overview(params: dict[str, Any]) -> ToolResult:
