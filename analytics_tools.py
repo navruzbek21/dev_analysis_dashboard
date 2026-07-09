@@ -171,7 +171,10 @@ def make_explanation_prompt(user_text: str, plan: dict[str, Any], result: ToolRe
     rows_preview = result.rows[:30]
     return (
         "Ты аналитик нефтяного дашборда. Дай короткий вывод на русском языке. "
-        "Опирайся только на агрегированные данные ниже. Не выдумывай причин, если они не следуют из данных. "
+        "Опирайся только на агрегированные данные ниже. Обязательно укажи конкретные числа/годы из строк или сводки. "
+        "Если строк нет или source_rows=0, прямо напиши, что в выбранном срезе нет строк, и не делай содержательный вывод. "
+        "Не пиши общие фразы вроде «не была отражена в агрегированных данных» без указания фильтров и количества строк. "
+        "Не выдумывай причин, если они не следуют из данных. "
         "Структура: 2-4 предложения, затем 1-3 пункта что проверить дальше.\n\n"
         f"Запрос пользователя: {user_text}\n"
         f"План: {plan}\n"
@@ -181,14 +184,24 @@ def make_explanation_prompt(user_text: str, plan: dict[str, Any], result: ToolRe
     )
 
 
+def requires_deterministic_explanation(result: ToolResult) -> bool:
+    if not result.rows:
+        return True
+    source_rows = result.summary.get("source_rows") if isinstance(result.summary, dict) else None
+    return source_rows == 0
+
+
 def fallback_explanation(user_text: str, result: ToolResult) -> str:
     summary = result.summary
     if result.tool in {"metric_dynamics", "metric_change"}:
         label = summary.get("metric_label", "Показатель")
         current = summary.get("last_value")
         change = summary.get("last_change_pct")
+        if not result.rows:
+            filters = "; ".join(result.notes or []) or "без фильтров"
+            return f"В выбранном срезе ({filters}) нет строк для расчета показателя «{label}». Проверьте выбранную площадь/НГДУ/месторождение и наличие данных за нужный период."
         if change is None or not np.isfinite(change):
-            return f"Построил агрегированный срез по показателю «{label}». Недостаточно базы сравнения для корректного процента изменения."
+            return f"Построил агрегированный срез по показателю «{label}»: последнее значение {_fmt_number(current)} за {summary.get('last_year') or 'последний доступный год'}. Недостаточно базы сравнения для корректного процента изменения."
         direction = "вырос" if change > 0 else ("снизился" if change < 0 else "не изменился")
         return (
             f"Показатель «{label}» в последнем доступном году {direction} на {change:+.1f}% к базе сравнения. "
@@ -203,6 +216,13 @@ def fallback_explanation(user_text: str, result: ToolResult) -> str:
             "Для интерпретации стоит сравнить вклад направлений ГТМ с базовой добычей по годам."
         )
     if result.tool == "table_analysis":
+        if not result.rows or summary.get("source_rows") == 0:
+            filters = "; ".join(result.notes or []) or "без фильтров"
+            return (
+                f"В выбранном срезе ({filters}) табличный анализ не нашел строк: "
+                f"получено {summary.get('row_count', 0)} строк из {summary.get('source_rows', 0)} строк источника. "
+                "Проверьте точное название площади/НГДУ и доступность данных за нужный период."
+            )
         return (
             f"Выполнил табличный анализ: получено {summary.get('row_count', 0)} строк из {summary.get('source_rows', 0)} строк источника. "
             f"Таблица: {summary.get('table')}; группировка: {summary.get('group_by') or 'без группировки'}."
@@ -236,6 +256,28 @@ def result_to_payload(result: ToolResult, explanation: str, plan: dict[str, Any]
     }
 
 
+def has_selected_dashboard_filters(dashboard_filters: dict[str, Any] | None) -> bool:
+    if not isinstance(dashboard_filters, dict):
+        return False
+    return any(_selected_values(dashboard_filters.get(key)) for key in ["mest", "ngdu", "areas", "block"])
+
+
+def with_note(result: ToolResult, note: str) -> ToolResult:
+    notes = list(result.notes or [])
+    if note not in notes:
+        notes.append(note)
+    return ToolResult(
+        tool=result.tool,
+        title=result.title,
+        chart_type=result.chart_type,
+        rows=result.rows,
+        columns=result.columns,
+        summary={**result.summary, "dashboard_filter_recovery": True},
+        chart=result.chart,
+        notes=notes,
+    )
+
+
 def apply_dashboard_context(plan: dict[str, Any], user_text: str, dashboard_filters: dict[str, Any] | None = None) -> dict[str, Any]:
     out = dict(plan or {})
     params = out.get("params") if isinstance(out.get("params"), dict) else {}
@@ -252,6 +294,10 @@ def apply_dashboard_context(plan: dict[str, Any], user_text: str, dashboard_filt
     if inferred_ngdu:
         filters["ngdu"] = inferred_ngdu
 
+    inferred_areas = _infer_area_values(user_text, filters)
+    if inferred_areas:
+        filters["areas"] = inferred_areas
+
     params["filters"] = filters
     out["params"] = params
     return out
@@ -261,7 +307,10 @@ def _infer_ngdu_values(text: str) -> list[str]:
     matches = re.findall(r"н\s*г\s*д\s*у[^0-9A-Za-zА-Яа-я]*(\d+)", text or "", flags=re.I)
     if not matches:
         return []
-    options = data_service.get_ngdu_options(())
+    try:
+        options = data_service.get_ngdu_options(())
+    except Exception:
+        return []
     found = []
     for number in matches:
         pattern = re.compile(rf"(?<!\d){re.escape(number)}(?!\d)")
@@ -269,6 +318,39 @@ def _infer_ngdu_values(text: str) -> list[str]:
             if pattern.search(str(option)) and option not in found:
                 found.append(option)
     return found
+
+
+def _infer_area_values(text: str, filters: dict[str, Any]) -> list[str]:
+    normalized_text = _normalize_match_text(text)
+    if not normalized_text or not any(marker in normalized_text for marker in ["площад", "площ"]):
+        return []
+    try:
+        options = data_service.get_area_options(
+            _selected_values(filters.get("ngdu") or filters.get("selected_ngdu")),
+            _selected_values(filters.get("mest") or filters.get("selected_mest")),
+        )
+    except Exception:
+        return []
+    found: list[str] = []
+    for option in options:
+        option_text = _normalize_match_text(option)
+        tokens = [token for token in option_text.split() if len(token) >= 4 and token not in {"площадь", "площади", "площад"}]
+        if option_text and (option_text in normalized_text or any(token in normalized_text for token in tokens)):
+            found.append(option)
+    return found[:20]
+
+
+def _normalize_match_text(value: Any) -> str:
+    text = str(value or "").lower().replace("ё", "е")
+    text = re.sub(r"[^0-9a-zа-я]+", " ", text)
+    words = []
+    for word in text.split():
+        for suffix in ["ской", "ской", "ская", "ское", "ский", "ская", "ую", "ой", "ая", "ое", "ые", "ий", "ый"]:
+            if len(word) > len(suffix) + 3 and word.endswith(suffix):
+                word = word[: -len(suffix)]
+                break
+        words.append(word)
+    return " ".join(words)
 
 
 def dataset_overview(params: dict[str, Any]) -> ToolResult:
