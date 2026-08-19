@@ -15,13 +15,11 @@ from services import data_service
 
 logger = logging.getLogger(__name__)
 
-try:
-    from sklearn.linear_model import LinearRegression
-except ImportError:  # pragma: no cover - numpy fallback is deterministic
-    LinearRegression = None
 
-
-PERIODS_ALGORITHM_VERSION = "wc-kiz-dp-linear-sse-v1"
+# v2: SSE отрезков через префиксные суммы вместо O(n²) обучений sklearn.
+# Результат сегментации тот же, версия меняет кэш-ключ на случай численных
+# расхождений на грани машинной точности.
+PERIODS_ALGORITHM_VERSION = "wc-kiz-dp-linear-sse-v2"
 
 
 @dataclass(frozen=True)
@@ -59,21 +57,34 @@ def compute_wc_kiz_periods_raw(d, n_periods=6, min_size=5):
     if df_seg.empty:
         return PeriodResult(pd.DataFrame(), tuple(), tuple())
 
-    def segment_sse(data, start, end):
-        part = data.iloc[start:end]
-        x = part["kiz"].to_numpy(dtype=float)
-        y = part["wc"].to_numpy(dtype=float)
-        if len(part) < 2:
-            return 0.0
-        if LinearRegression is not None:
-            model = LinearRegression()
-            model.fit(x.reshape(-1, 1), y)
-            y_pred = model.predict(x.reshape(-1, 1))
-        else:
-            x_matrix = np.column_stack([np.ones(len(x)), x])
-            coef, *_ = np.linalg.lstsq(x_matrix, y, rcond=None)
-            y_pred = x_matrix @ coef
-        return float(np.sum((y - y_pred) ** 2))
+    def segment_sse_matrix(x, y, min_size_eff):
+        """SSE линейной регрессии wc = a + b·kiz для всех отрезков [i, j).
+
+        Через префиксные суммы: SSE = Syy − Sy²/m − cov²/var_x. Это заменяет
+        O(n²) отдельных обучений LinearRegression одной векторной операцией
+        на строку; при вырожденном var_x (все kiz равны) остаётся SSE
+        относительно среднего — так же, как у МНК минимальной нормы.
+        """
+        n = len(x)
+        cx = np.concatenate([[0.0], np.cumsum(x)])
+        cy = np.concatenate([[0.0], np.cumsum(y)])
+        cxx = np.concatenate([[0.0], np.cumsum(x * x)])
+        cyy = np.concatenate([[0.0], np.cumsum(y * y)])
+        cxy = np.concatenate([[0.0], np.cumsum(x * y)])
+        sse = np.full((n + 1, n + 1), np.inf)
+        for i in range(n):
+            j = np.arange(i + min_size_eff, n + 1)
+            if j.size == 0:
+                continue
+            m = (j - i).astype(float)
+            sx, sy = cx[j] - cx[i], cy[j] - cy[i]
+            sxx, syy, sxy = cxx[j] - cxx[i], cyy[j] - cyy[i], cxy[j] - cxy[i]
+            var_x = sxx - sx * sx / m
+            cov = sxy - sx * sy / m
+            total = syy - sy * sy / m
+            explained = np.where(var_x > 1e-12, cov * cov / np.maximum(var_x, 1e-12), 0.0)
+            sse[i, j] = np.maximum(total - explained, 0.0)
+        return sse
 
     def find_best_segments(data, n_segments=6, min_size=5):
         n = len(data)
@@ -82,10 +93,11 @@ def compute_wc_kiz_periods_raw(d, n_periods=6, min_size=5):
         if n_segments == 1:
             return [(0, n)]
 
-        sse = np.full((n + 1, n + 1), np.inf)
-        for i in range(n):
-            for j in range(i + min_size_eff, n + 1):
-                sse[i, j] = segment_sse(data, i, j)
+        sse = segment_sse_matrix(
+            data["kiz"].to_numpy(dtype=float),
+            data["wc"].to_numpy(dtype=float),
+            min_size_eff,
+        )
 
         dp = np.full((n_segments + 1, n + 1), np.inf)
         prev = np.full((n_segments + 1, n + 1), -1, dtype=int)

@@ -153,7 +153,7 @@ def get_or_compute(
     if use_local_cache:
         local_value = _local_get(key)
         if local_value is not _MISS:
-            logger.info("cache hit level=L1 key=%s elapsed_ms=%.1f", key, (time.perf_counter() - started) * 1000)
+            logger.debug("cache hit level=L1 key=%s elapsed_ms=%.1f", key, (time.perf_counter() - started) * 1000)
             return local_value
 
     redis_value = None
@@ -167,7 +167,7 @@ def get_or_compute(
         value = deserializer(redis_value)
         if use_local_cache:
             _local_set(key, value)
-        logger.info("cache hit level=Redis key=%s bytes=%s elapsed_ms=%.1f", key, len(redis_value), (time.perf_counter() - started) * 1000)
+        logger.debug("cache hit level=Redis key=%s bytes=%s elapsed_ms=%.1f", key, len(redis_value), (time.perf_counter() - started) * 1000)
         return value
 
     def compute_and_store():

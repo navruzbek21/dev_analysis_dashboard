@@ -13,8 +13,13 @@ The application reads two parquet files:
 
 ## Files
 
-- `app.py` is the Dash entrypoint and exports `server = app.server`.
-- `app_tatneft_g17_g20_diag.py` is the standalone parquet-based legacy-style app.
+- `app.py` is the thin Dash entrypoint: creates the app, wires layout, routes and callback registration; exports `server = app.server`.
+- `theme.py` holds the shared palette, plotly template and runtime theming used by every tab.
+- `common.py` holds shared tab constants and helpers (metric dictionaries, filter normalization, KPI cards).
+- `figures/` contains the figure builders: `main_tab.py`, `asset_tab.py`, `displacement.py`.
+- `layouts.py` contains tab layouts and the page shell.
+- `callbacks/` contains callback modules registered via `register(app)`: `theme_callbacks.py`, `filters.py`, `main.py`, `asset.py`.
+- `gtm_analysis.py` is the GTM efficiency tab (layout + callbacks), `litellm_console.py` the LiteLLM console (page template in `templates/litellm_console.html`).
 - `legacy/` contains rollback copies.
 - `assets/operator_tatneft_style.css` is auto-loaded by Dash.
 - `normalization.py` contains parquet normalization logic.
@@ -26,7 +31,7 @@ The application reads two parquet files:
 - Data/options: `CACHE_DATA_TTL=3600`
 - Aggregates: `CACHE_AGG_TTL=3600`
 - g16/g20 period result: `CACHE_PERIODS_TTL=21600`
-- Figure JSON for `g01`, `g16`, `g20`, `main-change`: `CACHE_FIGURE_TTL=1800`
+- Figure JSON (main tab figures, `g01`, `g16`, `g20`, GTM tab figures): `CACHE_FIGURE_TTL=1800`
 
 Cache keys include a parquet dataset version derived from the source file paths, modification times, and sizes.
 
@@ -200,8 +205,12 @@ PYTHONPATH=. pytest
 In minimal environments without pytest:
 
 ```bash
-PYTHONPATH=. python -m unittest discover -s tests
+pip install -r requirements-dev.txt
+python -m ruff check .
+python -m pytest -q
 ```
+
+The same checks run in CI (`.github/workflows/ci.yml`) together with `pip-audit`.
 
 ## Rollback
 

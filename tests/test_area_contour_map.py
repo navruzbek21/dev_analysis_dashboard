@@ -4,6 +4,7 @@ import pandas as pd
 
 import app
 from app import AREA_COL_YEAR, area_metric_contour_map, main_tab_layout
+from figures import main_tab
 
 
 def _collect_component_ids(component):
@@ -45,8 +46,7 @@ def test_area_metric_contour_map_fills_irap_contour_and_labels_value(tmp_path, m
         "0 0 0\n10 0 0\n10 5 0\n0 5 0\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(app, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
-    app._load_area_contours.cache_clear()
+    monkeypatch.setattr(main_tab, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
 
     data = pd.DataFrame(
         {
@@ -68,8 +68,7 @@ def test_area_metric_contour_map_aggregates_current_year_by_area(tmp_path, monke
     contour_dir = tmp_path / "area_contours"
     contour_dir.mkdir()
     (contour_dir / "area-a.dat").write_text("0 0 0\n1 0 0\n1 1 0\n0 1 0\n", encoding="utf-8")
-    monkeypatch.setattr(app, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
-    app._load_area_contours.cache_clear()
+    monkeypatch.setattr(main_tab, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
 
     data = pd.DataFrame(
         {
@@ -92,8 +91,7 @@ def test_area_metric_contour_map_overlays_selected_area_blocks(tmp_path, monkeyp
     (contour_dir / "Альметьевская.txt").write_text("0 0 0\n4 0 0\n4 4 0\n0 4 0\n", encoding="utf-8")
     (contour_dir / "Альметьевская_1.txt").write_text("0 0 0\n2 0 0\n2 4 0\n0 4 0\n", encoding="utf-8")
     (contour_dir / "Альметьевская_2.txt").write_text("2 0 0\n4 0 0\n4 4 0\n2 4 0\n", encoding="utf-8")
-    monkeypatch.setattr(app, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
-    app._load_area_contours.cache_clear()
+    monkeypatch.setattr(main_tab, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
 
     data = pd.DataFrame(
         {
@@ -117,8 +115,7 @@ def test_block_contour_labels_include_reserves_pressure_and_click_marker(tmp_pat
     contour_dir.mkdir()
     (contour_dir / "Area.txt").write_text("0 0 0\n4 0 0\n4 4 0\n0 4 0\n", encoding="utf-8")
     (contour_dir / "Area_1.txt").write_text("0 0 0\n2 0 0\n2 4 0\n0 4 0\n", encoding="utf-8")
-    monkeypatch.setattr(app, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
-    app._load_area_contours.cache_clear()
+    monkeypatch.setattr(main_tab, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
 
     data = pd.DataFrame(
         {
@@ -147,8 +144,7 @@ def test_contour_fill_and_labels_are_clickable(tmp_path, monkeypatch):
     contour_dir = tmp_path / "area_contours"
     contour_dir.mkdir()
     (contour_dir / "Area.txt").write_text("0 0 0\n4 0 0\n4 4 0\n0 4 0\n", encoding="utf-8")
-    monkeypatch.setattr(app, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
-    app._load_area_contours.cache_clear()
+    monkeypatch.setattr(main_tab, "settings", SimpleNamespace(area_contours_dir=str(contour_dir)))
 
     data = pd.DataFrame({AREA_COL_YEAR: ["Area"], "year": [2026], "dobycha_nefti": [100.0]})
 

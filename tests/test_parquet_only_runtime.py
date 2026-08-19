@@ -3,9 +3,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_FILES = [
     ROOT / "app.py",
+    ROOT / "common.py",
+    ROOT / "layouts.py",
     ROOT / "config.py",
     ROOT / "services" / "data_service.py",
     ROOT / "docker-compose.yml",
+    *sorted((ROOT / "figures").glob("*.py")),
+    *sorted((ROOT / "callbacks").glob("*.py")),
 ]
 
 

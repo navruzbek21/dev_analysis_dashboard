@@ -1664,11 +1664,17 @@ def register_callbacks(app):
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
         Input(cid("block-filter"), "value"),
+        State(cid("well-history-filter"), "value"),
     )
-    def update_well_history_options(direction=ALL, plosh=ALL, mest=ALL, block=ALL_BLOCK_VALUE):
+    def update_well_history_options(direction=ALL, plosh=ALL, mest=ALL, block=ALL_BLOCK_VALUE, current_well=None):
         dataset = get_gtm_dataset()
         options = make_well_options(direction, plosh, dataset, mest, block)
-        value = options[0]["value"] if options else None
+        allowed = {option["value"] for option in options}
+        # Не сбрасываем изучаемую скважину, пока она есть в новом срезе.
+        if current_well in allowed:
+            value = current_well
+        else:
+            value = options[0]["value"] if options else None
         return options, value
 
     @app.callback(
