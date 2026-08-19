@@ -10,11 +10,10 @@ import urllib.error
 import urllib.request
 
 from dash import html
-from flask import Response, jsonify, request
 from dotenv import load_dotenv
+from flask import Response, jsonify, request
 
 import analytics_tools
-
 
 load_dotenv(os.getenv("ENV_FILE", ".env"))
 

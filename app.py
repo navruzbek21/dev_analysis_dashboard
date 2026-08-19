@@ -10,148 +10,51 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.io as pio
 from plotly.subplots import make_subplots
+
 try:
     from sklearn.linear_model import LinearRegression
 except ImportError:
     LinearRegression = None
-from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
-from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
+from dash import MATCH, Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash.exceptions import PreventUpdate
 
+import gtm_analysis
+import litellm_console
 from cache_backend import check_redis_connection
 from config import settings
 from filter_utils import normalize_filter_values
-from normalization import ALL_BLOCK_VALUE, AREA_COL_MONTH, AREA_COL_YEAR, BLOCK_COL, INCLUDE_BLOCK_ROWS_VALUE, MEST_COL, safe_div
+from normalization import ALL_BLOCK_VALUE, AREA_COL_YEAR, BLOCK_COL, INCLUDE_BLOCK_ROWS_VALUE, safe_div
 from services import aggregation_service, data_service, figure_service, periods_service
-import gtm_analysis
-import litellm_console
-
+from theme import (
+    HEAT_SCALE,
+    OP_AMBER,
+    OP_BORDER,
+    OP_GREEN,
+    OP_GREEN_DEEP,
+    OP_GRID,
+    OP_INK,
+    OP_MUTED,
+    OP_RED,
+    PALETTE,
+    TN_DEBIT_LIQ_PURPLE,
+    TN_DEBIT_OIL_RED,
+    TN_FUND_BLUE,
+    TN_INJ_BLUE,
+    TN_LIQ_GREEN,
+    TN_OIL_BURGUNDY,
+    TN_WC_CYAN,
+    apply_runtime_theme,
+    apply_theme,
+    empty_fig,
+    normalize_theme,
+    sparkline,
+)
+from theme import rgba_from_hex as _rgba_from_hex
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
-
-WELL_COL = "well_uid"
-
-# =============================================================================
-# 2. ВИЗУАЛЬНАЯ СИСТЕМА «ТАТНЕФТЬ»
-# -----------------------------------------------------------------------------
-# Палитра и типографика сняты с презентационного шаблона:
-# основной зелёный #008E5B, акцентный зелёный #00B473, красный #D53033,
-# светлый фон и шрифт Montserrat.
-# =============================================================================
-
-OP_BG = "#F7F8F5"
-OP_CARD = "#FFFFFF"
-OP_CARD2 = "#F1F5EF"
-OP_BORDER = "#DDE7E1"
-OP_GRID = "#E5EDE8"
-OP_INK = "#1F2B25"
-OP_MUTED = "#6F7D76"
-OP_GREEN = "#008E5B"
-OP_GREEN_DEEP = "#006B45"
-OP_GREEN_LIGHT = "#C5E5D7"
-OP_AMBER = "#F2B84B"
-OP_RED = "#D53033"
-PALETTE = [OP_GREEN, "#00B473", OP_RED, "#7CB342", "#44546A", OP_AMBER, "#7E8C86", "#B8D9CC", OP_GREEN_DEEP]
-HEAT_SCALE = [[0.0, "#EEF5F1"], [0.45, OP_GREEN_LIGHT], [0.75, OP_GREEN], [1.0, OP_RED]]
-
-THEME_TOKENS = {
-    "light": {
-        "card": OP_CARD,
-        "ink": OP_INK,
-        "muted": OP_MUTED,
-        "border": OP_BORDER,
-        "grid": OP_GRID,
-        "legend_bg": "rgba(255,255,255,0)",
-        "hover_bg": "#FFFFFF",
-    },
-    "dark": {
-        "card": "#17211D",
-        "ink": "#E8F0EC",
-        "muted": "#A8B9B0",
-        "border": "#314138",
-        "grid": "rgba(168, 185, 176, 0.16)",
-        "legend_bg": "rgba(23,33,29,0)",
-        "hover_bg": "#1F2B26",
-    },
-}
-
-# Дополнительные цвета для графика технологической динамики
-TN_LIQ_GREEN = "#008E5B"      # добыча жидкости
-TN_OIL_BURGUNDY = "#7A1F2B"   # добыча нефти
-TN_INJ_BLUE = "#1F77B4"       # закачка
-TN_WC_CYAN = "#45B8D8"        # обводнённость
-TN_DEBIT_LIQ_PURPLE = "#7E57C2"
-TN_DEBIT_OIL_RED = "#D53033"
-TN_FUND_BLUE = "#2F80ED"
-
-FONT_BODY = "Montserrat, Segoe UI, Arial, sans-serif"
-FONT_MONO = "Montserrat, Segoe UI, Arial, sans-serif"
-
-pio.templates["tatneft_light"] = go.layout.Template(
-    layout=go.Layout(
-        font=dict(family=FONT_BODY, color=OP_INK, size=12),
-        paper_bgcolor=OP_CARD,
-        plot_bgcolor=OP_CARD,
-        colorway=PALETTE,
-        margin=dict(l=62, r=28, t=62, b=58),
-        title=dict(font=dict(size=14, color=OP_GREEN, family=FONT_BODY), x=0.0, xanchor="left", yanchor="top", y=0.98),
-        xaxis=dict(showgrid=False, zeroline=False, linecolor=OP_BORDER, tickcolor=OP_BORDER, tickfont=dict(family=FONT_BODY, size=10.5, color=OP_MUTED), title=dict(font=dict(color=OP_MUTED))),
-        yaxis=dict(showgrid=True, gridcolor=OP_GRID, zeroline=False, linecolor=OP_BORDER, tickcolor=OP_BORDER, tickfont=dict(family=FONT_BODY, size=10.5, color=OP_MUTED), title=dict(font=dict(color=OP_MUTED))),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10.5, color=OP_MUTED), bgcolor="rgba(255,255,255,0)"),
-        hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=OP_GREEN, font=dict(color=OP_INK, family=FONT_BODY, size=11)),
-        colorscale=dict(sequential=HEAT_SCALE),
-    )
-)
-pio.templates.default = "tatneft_light"
-
-
-def normalize_theme(theme: str | None) -> str:
-    return "dark" if theme == "dark" else "light"
-
-
-def apply_runtime_theme(fig, theme: str | None = "light"):
-    theme_name = normalize_theme(theme)
-    tokens = THEME_TOKENS[theme_name]
-    themed = go.Figure(fig)
-    themed.update_layout(
-        paper_bgcolor=tokens["card"],
-        plot_bgcolor=tokens["card"],
-        font=dict(family=FONT_BODY, color=tokens["ink"], size=12),
-        legend=dict(
-            font=dict(color=tokens["muted"]),
-            bgcolor=tokens["legend_bg"],
-            bordercolor=tokens["border"],
-        ),
-        hoverlabel=dict(
-            bgcolor=tokens["hover_bg"],
-            bordercolor=OP_GREEN,
-            font=dict(color=tokens["ink"], family=FONT_BODY, size=11),
-        ),
-    )
-    axis_names = [
-        axis_name
-        for axis_name in themed.to_plotly_json().get("layout", {})
-        if axis_name.startswith(("xaxis", "yaxis"))
-    ]
-    for axis_name in axis_names:
-        if axis_name.startswith(("xaxis", "yaxis")):
-            themed.update_layout(
-                **{
-                    axis_name: dict(
-                        gridcolor=tokens["grid"],
-                        linecolor=tokens["border"],
-                        tickcolor=tokens["border"],
-                        tickfont=dict(color=tokens["muted"]),
-                        title=dict(font=dict(color=tokens["muted"])),
-                    )
-                }
-            )
-    for annotation in themed.layout.annotations or ():
-        annotation.update(font=dict(color=tokens["muted"]))
-    return themed
 
 YEAR_METRICS = {
     "dobycha_nefti": "Добыча нефти, т",
@@ -208,13 +111,6 @@ def _selected_or_all(value, allowed_values, all_value):
     allowed = set(allowed_values)
     selected = [item for item in values if item in allowed]
     return selected or [all_value]
-
-
-def _rgba_from_hex(color, alpha):
-    if not isinstance(color, str) or not color.startswith("#") or len(color) != 7:
-        return color
-    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-    return f"rgba({r},{g},{b},{alpha})"
 
 
 def compact(value):
@@ -291,7 +187,6 @@ def _safe_initial_options(loader, label):
 ALL_MEST = _safe_initial_options(data_service.get_mest_options, "mest")
 ALL_NGDU = _safe_initial_options(lambda: data_service.get_ngdu_options(tuple()), "ngdu")
 ALL_AREAS = _safe_initial_options(lambda: data_service.get_area_options(tuple(), tuple()), "area")
-LAST_YEAR = None
 
 
 def filter_year_data(selected_ngdu, selected_areas, selected_mest=()):
@@ -300,62 +195,6 @@ def filter_year_data(selected_ngdu, selected_areas, selected_mest=()):
         _filter_key(selected_areas, ALL_AREAS_VALUE),
         _filter_key(selected_mest, ALL_MEST_VALUE),
     )
-
-
-def apply_theme(fig, height=None, compact=False):
-    # Высота задаётся одновременно контейнеру dcc.Graph и Plotly layout.
-    # Заголовки внутри Plotly не используем: название уже есть в шапке карточки.
-    layout_kwargs = dict(
-        template="tatneft_light",
-        autosize=True,
-        title=None,
-        margin=dict(l=62, r=34, t=30, b=74),
-    )
-    if compact:
-        layout_kwargs.update(
-            margin=dict(l=54, r=22, t=24, b=58),
-            legend=dict(
-                orientation="h",
-                yanchor="top",
-                y=-0.24,
-                xanchor="left",
-                x=0,
-                font=dict(size=9.5, color=OP_MUTED),
-                bgcolor="rgba(255,255,255,0)",
-                itemwidth=30,
-            ),
-        )
-    if height is not None:
-        layout_kwargs["height"] = int(str(height).replace("px", ""))
-    fig.update_layout(**layout_kwargs)
-    fig.update_xaxes(automargin=True)
-    fig.update_yaxes(automargin=True)
-    return fig
-
-
-def empty_fig(title="Нет данных", height=None):
-    fig = go.Figure()
-    fig.add_annotation(text=title, x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font=dict(size=14, color=OP_MUTED))
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False)
-    return apply_theme(fig, height=height)
-
-
-def sparkline(x, y, color=OP_GREEN):
-    fig = go.Figure(go.Scatter(x=list(x), y=list(y), mode="lines", line=dict(color=color, width=2), fill="tozeroy", hoverinfo="skip"))
-    if color.startswith("#") and len(color) == 7:
-        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-        fig.update_traces(fillcolor=f"rgba({r},{g},{b},0.12)")
-    fig.update_layout(
-        height=46,
-        margin=dict(l=0, r=0, t=2, b=0),
-        paper_bgcolor="rgba(255,255,255,0)",
-        plot_bgcolor="rgba(255,255,255,0)",
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        showlegend=False,
-    )
-    return fig
 
 
 def delta_block(cur, prev, unit_pp=False, positive_is_bad=False):
@@ -1058,136 +897,13 @@ def niz_otbor_vs_wc_identity(d):
     fig.update_layout(xaxis_title="Обводнённость, %", yaxis_title="Отбор от НИЗ, %")
     return apply_theme(fig, height=440, compact=True)
 
-def compute_wc_kiz_periods(d, n_periods=6, min_size=5):
-    """Возвращает данные с периодами разработки, рассчитанными по зависимости wc = a + b * kiz.
-
-    Периоды считаются один раз и могут использоваться в разных карточках:
-    - g16: Обводнённость от КИЗ;
-    - g20: Доб/наг от Qприем/Qжидк, окраска точек по тем же периодам.
-    """
-    required = ["year", "kiz", "wc"]
-    miss = [c for c in required if c not in d.columns]
-    if d.empty or miss:
-        return pd.DataFrame(), [], miss
-
-    keep_cols = ["year", "kiz", "wc", AREA_COL_YEAR]
-    if "ngdu" in d.columns:
-        keep_cols.append("ngdu")
-
-    df_seg = d[keep_cols].copy()
-    df_seg["__src_index"] = d.index
-    df_seg = df_seg.dropna(subset=["year", "kiz", "wc"]).copy()
-    if df_seg.empty:
-        return pd.DataFrame(), [], []
-
-    df_seg["year"] = pd.to_numeric(df_seg["year"], errors="coerce")
-    df_seg["kiz"] = pd.to_numeric(df_seg["kiz"], errors="coerce")
-    df_seg["wc"] = pd.to_numeric(df_seg["wc"], errors="coerce")
-    df_seg = (
-        df_seg
-        .dropna(subset=["year", "kiz", "wc"])
-        .sort_values(["year", AREA_COL_YEAR])
-        .reset_index(drop=True)
-    )
-    if df_seg.empty:
-        return pd.DataFrame(), [], []
-
-    def segment_sse(data, start, end):
-        """Ошибка линейной регрессии wc = a + b * kiz на участке [start, end)."""
-        part = data.iloc[start:end]
-        x = part["kiz"].to_numpy(dtype=float)
-        y = part["wc"].to_numpy(dtype=float)
-
-        if len(part) < 2:
-            return 0.0
-
-        if LinearRegression is not None:
-            model = LinearRegression()
-            model.fit(x.reshape(-1, 1), y)
-            y_pred = model.predict(x.reshape(-1, 1))
-        else:
-            # Fallback без sklearn: обычная МНК-регрессия y = a + b*x.
-            X = np.column_stack([np.ones(len(x)), x])
-            coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-            y_pred = X @ coef
-
-        return float(np.sum((y - y_pred) ** 2))
-
-    def find_best_segments(data, n_segments=6, min_size=5):
-        """Оптимальное разбиение временного ряда на n_segments периодов."""
-        n = len(data)
-        n_segments = int(max(1, min(n_segments, n // min_size))) if n >= min_size else 1
-        min_size_eff = min_size if n >= min_size else max(1, n)
-
-        if n_segments == 1:
-            return [(0, n)]
-
-        sse = np.full((n + 1, n + 1), np.inf)
-        for i in range(n):
-            for j in range(i + min_size_eff, n + 1):
-                sse[i, j] = segment_sse(data, i, j)
-
-        dp = np.full((n_segments + 1, n + 1), np.inf)
-        prev = np.full((n_segments + 1, n + 1), -1, dtype=int)
-        dp[0, 0] = 0.0
-
-        for k in range(1, n_segments + 1):
-            j_min = k * min_size_eff
-            for j in range(j_min, n + 1):
-                best_value = np.inf
-                best_i = -1
-                i_min = (k - 1) * min_size_eff
-                i_max = j - min_size_eff + 1
-                for i in range(i_min, i_max):
-                    value = dp[k - 1, i] + sse[i, j]
-                    if value < best_value:
-                        best_value = value
-                        best_i = i
-                dp[k, j] = best_value
-                prev[k, j] = best_i
-
-        if prev[n_segments, n] < 0:
-            return [(0, n)]
-
-        segments = []
-        j = n
-        for k in range(n_segments, 0, -1):
-            i = prev[k, j]
-            if i < 0:
-                return [(0, n)]
-            segments.append((i, j))
-            j = i
-
-        return segments[::-1]
-
-    segments = find_best_segments(df_seg, n_segments=n_periods, min_size=min_size)
-
-    df_seg["period_number"] = np.nan
-    for period_num, (start, end) in enumerate(segments, start=1):
-        df_seg.loc[start:end - 1, "period_number"] = period_num
-    df_seg["period_number"] = df_seg["period_number"].astype(int)
-
-    period_info = (
-        df_seg.groupby("period_number", as_index=False)
-        .agg(year_start=("year", "min"), year_end=("year", "max"))
-        .sort_values("period_number")
-    )
-    period_info["period"] = period_info.apply(
-        lambda row: f"Период {int(row['period_number'])}: {int(row['year_start'])}-{int(row['year_end'])} гг.",
-        axis=1,
-    )
-    df_seg = df_seg.merge(period_info[["period_number", "period"]], on="period_number", how="left")
-    return df_seg, segments, []
-
-
 def segmented_wc_kiz(d, n_periods=6, min_size=5, period_result=None):
     """Карточка 16: Обводнённость от КИЗ с оптимальным разбиением на периоды."""
     if period_result is None:
-        df_seg, segments, miss = compute_wc_kiz_periods(d, n_periods=n_periods, min_size=min_size)
-    else:
-        df_seg = period_result.data.copy()
-        segments = list(period_result.segments)
-        miss = list(period_result.missing_columns)
+        period_result = periods_service.compute_wc_kiz_periods_raw(d, n_periods=n_periods, min_size=min_size)
+    df_seg = period_result.data.copy()
+    segments = list(period_result.segments)
+    miss = list(period_result.missing_columns)
     if miss:
         return empty_fig(f"Нет данных: {', '.join(miss)}", height=440)
     if df_seg.empty:
@@ -1312,10 +1028,9 @@ def ratio_vs_q_by_wc_kiz_periods(d, period_result=None):
         return empty_fig(f"Нет данных: {', '.join(miss)}", height=440)
 
     if period_result is None:
-        df_periods, _segments, period_miss = compute_wc_kiz_periods(d)
-    else:
-        df_periods = period_result.data.copy()
-        period_miss = list(period_result.missing_columns)
+        period_result = periods_service.compute_wc_kiz_periods_raw(d)
+    df_periods = period_result.data.copy()
+    period_miss = list(period_result.missing_columns)
     if period_miss or df_periods.empty:
         # Если периоды невозможно рассчитать, возвращаем обычный график с трендом.
         return scatter_metric(
@@ -1665,29 +1380,35 @@ def _solve_target_x_for_annual_vnf(trend_df: pd.DataFrame, target_vnf: float, mo
         step *= 1.4
     return np.nan
 
+def _displacement_x_from_oil(mode: str, oil_value: float, target_vnf: float) -> float:
+    """Координата X характеристики, соответствующая накопленной нефти при целевом ВНФ.
+
+    Единственное место, где закодирована обратная связь «нефть -> X» для всех
+    методов: используется и в решателе, и при построении точки прогноза.
+    """
+    if mode == "oil_from_liquid_log":
+        return float(np.log(oil_value * (1 + target_vnf)))
+    if mode == "oil_from_liquid_inv":
+        return float(1 / (oil_value * (1 + target_vnf)))
+    if mode == "oil_from_water_log":
+        return float(np.log(oil_value * target_vnf))
+    if mode == "oil_from_liquid_inv_sqrt":
+        return float(1 / np.sqrt(oil_value * (1 + target_vnf)))
+    if mode in {"vnf_from_liquid", "liquid_oil_ratio_from_liquid"}:
+        return float(oil_value * (1 + target_vnf))
+    if mode == "liquid_oil_ratio_from_water":
+        return float(oil_value * target_vnf)
+    return float(oil_value)
+
+
 def _solve_target_oil_from_vnf(model_fn, target_vnf: float, mode: str, oil_min: float, oil_max: float) -> float:
     if not np.isfinite(oil_min) or oil_min <= 0:
         oil_min = 1.0
     if not np.isfinite(oil_max) or oil_max <= oil_min:
         oil_max = oil_min * 2
 
-    def x_from_oil(oil_value):
-        if mode in {"oil_from_liquid_log"}:
-            return np.log(oil_value * (1 + target_vnf))
-        if mode in {"oil_from_liquid_inv"}:
-            return 1 / (oil_value * (1 + target_vnf))
-        if mode == "oil_from_water_log":
-            return np.log(oil_value * target_vnf)
-        if mode == "oil_from_liquid_inv_sqrt":
-            return 1 / np.sqrt(oil_value * (1 + target_vnf))
-        if mode in {"vnf_from_liquid", "liquid_oil_ratio_from_liquid"}:
-            return oil_value * (1 + target_vnf)
-        if mode == "liquid_oil_ratio_from_water":
-            return oil_value * target_vnf
-        return oil_value
-
     def residual(oil_value):
-        predicted = float(model_fn([x_from_oil(oil_value)])[0])
+        predicted = float(model_fn([_displacement_x_from_oil(mode, oil_value, target_vnf)])[0])
         if mode in {"vnf_from_oil", "vnf_from_liquid"}:
             return predicted - target_vnf
         if mode in {"liquid_oil_ratio_from_water", "liquid_oil_ratio_from_liquid"}:
@@ -1786,35 +1507,20 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
 
     if len(trend_df) >= 2:
         trend_a, trend_b = _linear_coefficients(trend_df["x_method"], trend_df["y_method"])
-        predict = lambda x_values: trend_a * np.asarray(x_values, dtype=float) + trend_b
+
+        def predict(x_values):
+            return trend_a * np.asarray(x_values, dtype=float) + trend_b
+
         last_trend_point = trend_df.sort_values("year").iloc[-1]
         x_start = float(last_trend_point["x_method"])
         target_x = _solve_target_x_for_annual_vnf(trend_df, DISPLACEMENT_TARGET_VNF, target_mode)
         if not np.isfinite(target_x):
             fig.add_annotation(text="Не удалось рассчитать точку годового ВНФ=49", xref="paper", yref="paper", x=0.5, y=0.9, showarrow=False, font=dict(color=OP_MUTED, size=11))
             target_x = x_start
-        target_y = float(predict([target_x])[0])
         target_oil, _target_water = _oil_water_from_displacement_x(target_x, trend_a, trend_b, target_mode)
         target_kin = _kin_from_oil(target_oil, recoverable_oil)
-
-        if target_mode in {"vnf_from_oil", "current_vnf_from_oil", "ln_liquid_from_oil", "ln_water_from_oil"}:
-            target_x = target_oil
-        elif target_mode == "oil_from_water_log":
-            target_x = np.log(target_oil * DISPLACEMENT_TARGET_VNF)
-        elif target_mode == "oil_from_liquid_inv":
-            target_x = 1 / (target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-        elif target_mode == "oil_from_liquid_inv_sqrt":
-            target_x = 1 / np.sqrt(target_oil * (1 + DISPLACEMENT_TARGET_VNF))
-        elif target_mode == "vnf_from_liquid":
-            target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
-        elif target_mode == "liquid_oil_ratio_from_water":
-            target_x = target_oil * DISPLACEMENT_TARGET_VNF
-        elif target_mode == "liquid_oil_ratio_from_liquid":
-            target_x = target_oil * (1 + DISPLACEMENT_TARGET_VNF)
+        target_x = _displacement_x_from_oil(target_mode, target_oil, DISPLACEMENT_TARGET_VNF)
         target_y = float(predict([target_x])[0])
-
-        last_trend_point = trend_df.sort_values("year").iloc[-1]
-        x_start = float(last_trend_point["x_method"])
 
         x_line = np.array([x_start, target_x], dtype=float)
         y_line = predict(x_line)
@@ -1841,23 +1547,39 @@ def displacement_characteristic_figure(yearly_agg, method: str, method_name: str
     )
     return apply_theme(fig, height=460, compact=True)
 
-def displacement_card(title, graph_id, slider_id):
+def _displacement_slider_bounds() -> tuple[int, int]:
+    """Границы слайдеров периода тренда — из фактических лет данных."""
+    try:
+        d = data_service.get_filtered_year_data((), (), ())
+        years = pd.to_numeric(d.get("year"), errors="coerce").dropna()
+        if not years.empty:
+            return int(years.min()), int(years.max())
+    except Exception:
+        logger.exception("Could not compute displacement slider bounds")
+    return DEFAULT_DISPLACEMENT_SLIDER_BOUNDS
+
+
+def displacement_card(title, method, slider_bounds=None):
+    # id-словари позволяют обновлять каждую характеристику отдельным
+    # MATCH-колбэком: движение одного слайдера не пересчитывает соседние карточки.
+    slider_min, slider_max = slider_bounds or DEFAULT_DISPLACEMENT_SLIDER_BOUNDS
+    default_period = [max(slider_min, slider_max - 5), slider_max]
     return html.Div(
         [
             html.Div(title, className="section-caption"),
             html.Div("Период для построения линии тренда", className="small text-muted mb-2"),
             dcc.RangeSlider(
-                id=slider_id,
-                min=2000,
-                max=2035,
+                id={"type": "disp-period", "method": method},
+                min=slider_min,
+                max=slider_max,
                 step=1,
-                value=DEFAULT_DISPLACEMENT_PERIOD,
-                marks={year: str(year) for year in range(2000, 2036, 5)},
+                value=default_period,
+                marks={year: str(year) for year in range(slider_min, slider_max + 1, 5)},
                 allowCross=False,
                 tooltip={"placement": "bottom", "always_visible": False},
             ),
             dcc.Graph(
-                id=graph_id,
+                id={"type": "disp-graph", "method": method},
                 className="dash-chart compact-chart",
                 style={"height": "460px", "width": "100%"},
                 responsive=True,
@@ -1891,12 +1613,15 @@ ANALYSIS_SPECS = [
 PRIMARY_ASSET_SPEC_IDS = {"g16", "g20"}
 ADDITIONAL_ANALYSIS_SPECS = [spec for spec in ANALYSIS_SPECS if spec[0] not in PRIMARY_ASSET_SPEC_IDS]
 
-DISPLACEMENT_TARGET_VNF = 49.0
-OIL_DENSITY_T_PER_M3 = 0.862
-WATER_DENSITY_T_PER_M3 = 1.185
-OIL_FORMATION_VOLUME_FACTOR = 1.157
-WATER_FORMATION_VOLUME_FACTOR = 1.0
+# Физические параметры пересчёта и целевой ВНФ настраиваются через окружение
+# (см. config.Settings): для другого месторождения их не нужно править в коде.
+DISPLACEMENT_TARGET_VNF = settings.displacement_target_vnf
+OIL_DENSITY_T_PER_M3 = settings.oil_density_t_per_m3
+WATER_DENSITY_T_PER_M3 = settings.water_density_t_per_m3
+OIL_FORMATION_VOLUME_FACTOR = settings.oil_formation_volume_factor
+WATER_FORMATION_VOLUME_FACTOR = settings.water_formation_volume_factor
 DEFAULT_DISPLACEMENT_PERIOD = [2020, 2025]
+DEFAULT_DISPLACEMENT_SLIDER_BOUNDS = (2000, 2035)
 DISPLACEMENT_SPECS = [
     ("disp-sazonov", "Характеристика вытеснения: метод Сазонова", "Сазонов", "sazonov"),
     ("disp-maksimov", "Характеристика вытеснения: метод Максимова", "Максимов", "maksimov"),
@@ -2056,6 +1781,7 @@ def main_tab_layout():
 
 
 def asset_tab_layout():
+    slider_bounds = _displacement_slider_bounds()
     return html.Div(
         [
             html.Div(
@@ -2105,8 +1831,8 @@ def asset_tab_layout():
                     html.Div("Характеристики вытеснения по выбранной площади", className="section-caption mt-3 mb-3"),
                     dbc.Row(
                         [
-                            dbc.Col(displacement_card(title, graph_id, f"{graph_id}-period"), lg=6, md=12, className="mb-4")
-                            for graph_id, title, _method_name, _method in DISPLACEMENT_SPECS
+                            dbc.Col(displacement_card(title, method, slider_bounds), lg=6, md=12, className="mb-4")
+                            for _graph_id, title, _method_name, method in DISPLACEMENT_SPECS
                         ]
                     ),
                 ],
@@ -2627,19 +2353,16 @@ def update_asset(selected_mest, selected_ngdu, selected_areas, selected_block, t
 @app.callback(
     Output("additional-metrics-container", "style"),
     *[Output(spec[0], "figure") for spec in ADDITIONAL_ANALYSIS_SPECS],
-    *[Output(spec[0], "figure") for spec in DISPLACEMENT_SPECS],
     Input("build-extra-metrics", "n_clicks"),
     Input("mest-filter", "value"),
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
     Input("asset-block-filter", "value"),
     Input("theme-store", "data"),
-    *[Input(f"{spec[0]}-period", "value") for spec in DISPLACEMENT_SPECS],
 )
-def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, selected_block, theme, *displacement_periods):
+def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, selected_areas, selected_block, theme):
     if not n_clicks:
-        hidden_count = len(ADDITIONAL_ANALYSIS_SPECS) + len(DISPLACEMENT_SPECS)
-        hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * hidden_count
+        hidden_figs = [empty_fig("Нажмите кнопку «Построить дополнительные метрики»")] * len(ADDITIONAL_ANALYSIS_SPECS)
         return [{"display": "none"}] + hidden_figs
 
     started = time.perf_counter()
@@ -2648,7 +2371,6 @@ def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, sele
     area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
     block_key = _block_filter_key(selected_block)
     d = data_service.get_filtered_year_data(ngdu_key, area_key, mest_key, block_key)
-    yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key, block_key)
     period_result = periods_service.get_wc_kiz_periods(ngdu_key, area_key, mest_key, block_key, n_periods=6, min_size=5)
 
     def safe_build(name, builder):
@@ -2675,18 +2397,6 @@ def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, sele
                 ),
             )
         )
-    for (graph_id, _title, method_name, method), period_value in zip(DISPLACEMENT_SPECS, displacement_periods):
-        figs.append(
-            safe_build(
-                graph_id,
-                lambda method=method, method_name=method_name, period_value=period_value: displacement_characteristic_figure(
-                    yearly_agg,
-                    method,
-                    method_name,
-                    period_value,
-                ),
-            )
-        )
 
     logger.info(
         "callback=update_additional_asset_metrics mest_count=%s ngdu_count=%s area_count=%s figures=%s total_ms=%.1f",
@@ -2697,6 +2407,53 @@ def update_additional_asset_metrics(n_clicks, selected_mest, selected_ngdu, sele
         (time.perf_counter() - started) * 1000,
     )
     return [{"display": "block"}] + [apply_runtime_theme(fig, theme) for fig in figs]
+
+
+DISPLACEMENT_METHOD_NAMES = {method: method_name for _graph_id, _title, method_name, method in DISPLACEMENT_SPECS}
+
+
+@app.callback(
+    Output({"type": "disp-graph", "method": MATCH}, "figure"),
+    Input("build-extra-metrics", "n_clicks"),
+    Input({"type": "disp-period", "method": MATCH}, "value"),
+    Input("mest-filter", "value"),
+    Input("ngdu-filter", "value"),
+    Input("area-filter", "value"),
+    Input("asset-block-filter", "value"),
+    Input("theme-store", "data"),
+)
+def update_displacement_figure(n_clicks, period_value, selected_mest, selected_ngdu, selected_areas, selected_block, theme):
+    """Одна карточка характеристики вытеснения на вызов.
+
+    MATCH-колбэк вместо общего на 8 графиков: движение слайдера периода
+    пересчитывает только свою характеристику, а не все карточки вкладки.
+    """
+    if not n_clicks:
+        return empty_fig("Нажмите кнопку «Построить дополнительные метрики»")
+
+    outputs = ctx.outputs_list
+    if isinstance(outputs, list):
+        outputs = outputs[0]
+    method = outputs["id"]["method"]
+    method_name = DISPLACEMENT_METHOD_NAMES.get(method, method)
+
+    started = time.perf_counter()
+    mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
+    ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
+    area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
+    block_key = _block_filter_key(selected_block)
+    try:
+        yearly_agg = aggregation_service.get_asset_year_aggregate(ngdu_key, area_key, mest_key, block_key)
+        fig = displacement_characteristic_figure(yearly_agg, method, method_name, period_value)
+    except Exception:
+        logger.exception("Displacement figure build failed method=%s", method)
+        fig = empty_fig(f"Ошибка построения характеристики: {method_name}")
+    logger.info(
+        "callback=update_displacement_figure method=%s total_ms=%.1f",
+        method,
+        (time.perf_counter() - started) * 1000,
+    )
+    return apply_runtime_theme(fig, theme)
 
 
 if __name__ == "__main__":

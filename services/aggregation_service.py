@@ -5,10 +5,9 @@ import pandas as pd
 
 from cache_backend import build_cache_key, dataframe_from_bytes, dataframe_to_bytes, get_or_compute, versioned_payload
 from config import settings
-from normalization import safe_div
 from filter_utils import normalize_filter_values
+from normalization import safe_div
 from services import data_service
-
 
 logger = logging.getLogger(__name__)
 

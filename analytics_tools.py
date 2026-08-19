@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import html
+import json
 import math
+import os
 import re
-from functools import lru_cache
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -15,7 +17,6 @@ from config import settings
 from filter_utils import normalize_filter_values
 from normalization import ALL_BLOCK_VALUE, AREA_COL_MONTH, AREA_COL_YEAR, BLOCK_COL, MEST_COL, safe_div
 from services import data_service
-
 
 ALLOWED_METRICS = {
     "dobycha_nefti": "Добыча нефти",
@@ -121,8 +122,6 @@ def parse_plan(raw_text: str) -> dict[str, Any] | None:
     if first >= 0 and last > first:
         text = text[first:last + 1]
     try:
-        import json
-
         value = json.loads(text)
     except Exception:
         return None
@@ -223,22 +222,11 @@ def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
 
 def execute_plan(plan: dict[str, Any]) -> ToolResult:
     tool = str(plan.get("tool") or "").strip()
-    if tool not in ALLOWED_TOOLS:
+    handler = _TOOL_HANDLERS.get(tool)
+    if handler is None:
         raise ValueError(f"Неизвестный аналитический инструмент: {tool or 'не указан'}")
     params = plan.get("params") if isinstance(plan.get("params"), dict) else {}
-    if tool == "metric_dynamics":
-        return metric_dynamics(params)
-    if tool == "metric_change":
-        return metric_change(params)
-    if tool == "gtm_structure":
-        return gtm_structure(params)
-    if tool == "gtm_efficiency":
-        return gtm_efficiency(params)
-    if tool == "dataset_overview":
-        return dataset_overview(params)
-    if tool == "table_analysis":
-        return table_analysis(params)
-    raise ValueError(f"Инструмент не реализован: {tool}")
+    return handler(params)
 
 
 def make_explanation_prompt(user_text: str, plan: dict[str, Any], result: ToolResult) -> str:
@@ -494,7 +482,7 @@ def _normalize_match_text(value: Any) -> str:
     text = re.sub(r"[^0-9a-zа-я]+", " ", text)
     words = []
     for word in text.split():
-        for suffix in ["ской", "ской", "ская", "ское", "ский", "ская", "ую", "ой", "ая", "ое", "ые", "ий", "ый"]:
+        for suffix in ["ской", "ская", "ское", "ский", "ую", "ой", "ая", "ое", "ые", "ий", "ый"]:
             if len(word) > len(suffix) + 3 and word.endswith(suffix):
                 word = word[: -len(suffix)]
                 break
@@ -521,8 +509,30 @@ def dataset_overview(params: dict[str, Any]) -> ToolResult:
     )
 
 
-@lru_cache(maxsize=1)
-def table_schema_summary() -> dict[str, Any]:
+def _parquet_signature(path: str) -> tuple:
+    try:
+        stat = os.stat(path)
+        return (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return (str(path), None, None)
+
+
+@lru_cache(maxsize=4)
+def _read_parquet_cached(signature: tuple) -> pd.DataFrame:
+    # Ключ — (path, mtime, size): при обновлении файла кэш инвалидируется сам.
+    return pd.read_parquet(signature[0])
+
+
+def _sources_signature() -> tuple:
+    return (
+        _parquet_signature(settings.parquet_monthly_path),
+        _parquet_signature(settings.parquet_yearly_path),
+        gtm_analysis._dataset_signature(),
+    )
+
+
+@lru_cache(maxsize=2)
+def _table_schema_summary_cached(_signature: tuple) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for table in sorted(TABLE_ANALYSIS_TABLES):
         try:
@@ -531,6 +541,12 @@ def table_schema_summary() -> dict[str, Any]:
         except Exception as exc:
             summary[table] = {"error": str(exc)}
     return summary
+
+
+def table_schema_summary() -> dict[str, Any]:
+    # Кэш по сигнатуре исходных файлов: обновился parquet — схема пересчитается
+    # без рестарта приложения.
+    return _table_schema_summary_cached(_sources_signature())
 
 
 def table_analysis(params: dict[str, Any]) -> ToolResult:
@@ -590,9 +606,11 @@ def table_analysis(params: dict[str, Any]) -> ToolResult:
 
 def _load_table_frame(table: str, filters: dict[str, Any]) -> pd.DataFrame:
     if table == "monthly_raw":
-        return _apply_common_filters(pd.read_parquet(settings.parquet_monthly_path), filters, area_col=AREA_COL_MONTH)
+        monthly = _read_parquet_cached(_parquet_signature(settings.parquet_monthly_path))
+        return _apply_common_filters(monthly, filters, area_col=AREA_COL_MONTH)
     if table == "yearly_raw":
-        return _apply_common_filters(pd.read_parquet(settings.parquet_yearly_path), filters, area_col=AREA_COL_YEAR)
+        yearly = _read_parquet_cached(_parquet_signature(settings.parquet_yearly_path))
+        return _apply_common_filters(yearly, filters, area_col=AREA_COL_YEAR)
     if table == "yearly":
         return _filtered_year_data(filters)
     dataset = gtm_analysis.get_gtm_dataset()
@@ -1089,3 +1107,15 @@ def _fmt_number(value: Any) -> str:
     if abs(numeric) >= 1_000:
         return f"{numeric / 1_000:.1f} тыс."
     return f"{numeric:.1f}"
+
+
+# Диспетчеризация инструментов плана; словарь собирается после определения
+# всех обработчиков.
+_TOOL_HANDLERS = {
+    "metric_dynamics": metric_dynamics,
+    "metric_change": metric_change,
+    "gtm_structure": gtm_structure,
+    "gtm_efficiency": gtm_efficiency,
+    "dataset_overview": dataset_overview,
+    "table_analysis": table_analysis,
+}

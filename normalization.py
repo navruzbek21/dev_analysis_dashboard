@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 
-
 AREA_COL_YEAR = "kod_ploshchadi"
 AREA_COL_MONTH = "kod_ploshchadi"
 MEST_COL = "mest"

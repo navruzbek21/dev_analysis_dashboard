@@ -65,6 +65,7 @@ def test_apply_dashboard_context_infers_ngdu_from_text(monkeypatch):
 
 def test_table_analysis_groups_and_aggregates(monkeypatch):
     import pandas as pd
+
     import analytics_tools
 
     df = pd.DataFrame(
@@ -94,6 +95,7 @@ def test_table_analysis_groups_and_aggregates(monkeypatch):
 
 def test_table_analysis_rejects_unknown_columns_and_caps_limit(monkeypatch):
     import pandas as pd
+
     import analytics_tools
 
     df = pd.DataFrame({"year": [2024, 2025], "value": [1, 2]})
@@ -126,6 +128,7 @@ def test_apply_dashboard_context_infers_area_from_user_text(monkeypatch):
 
 def test_apply_dashboard_context_infers_area_from_gtm_options_when_yearly_filter_options_empty(monkeypatch):
     import pandas as pd
+
     import analytics_tools
 
     class Dataset:
@@ -167,6 +170,7 @@ def test_gtm_efficiency_empty_result_explanation_is_not_zero_success_message():
 
 def test_apply_dashboard_context_prefers_exact_area_and_clears_incompatible_context(monkeypatch):
     import pandas as pd
+
     import analytics_tools
 
     class Dataset:
@@ -193,6 +197,7 @@ def test_apply_dashboard_context_prefers_exact_area_and_clears_incompatible_cont
 
 def test_apply_dashboard_context_prefers_northern_area_when_named(monkeypatch):
     import pandas as pd
+
     import analytics_tools
 
     class Dataset:

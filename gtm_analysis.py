@@ -27,16 +27,18 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+import dash_bootstrap_components as dbc
 import numpy as np
 import pandas as pd
-from dash import dcc, html, Input, Output, State, dash_table
-import dash_bootstrap_components as dbc
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
+from dash import Input, Output, State, dash_table, dcc, html
 from plotly.subplots import make_subplots
 
 from normalization import ALL_BLOCK_VALUE
-from services import data_service
+from services import data_service, figure_service
+from theme import DARK_TOKENS
+from theme import apply_runtime_theme as shared_apply_runtime_theme
 
 # -----------------------------------------------------------------------------
 # Константы визуализации
@@ -101,16 +103,7 @@ THEME_TOKENS = {
         "legend_bg": "rgba(255,255,255,0.92)",
         "hover_bg": "white",
     },
-    "dark": {
-        "card": "#17211D",
-        "paper": "#101815",
-        "ink": "#E8F0EC",
-        "muted": "#A8B9B0",
-        "border": "#314138",
-        "grid": "rgba(168, 185, 176, 0.16)",
-        "legend_bg": "rgba(23,33,29,0.94)",
-        "hover_bg": "#1F2B26",
-    },
+    "dark": DARK_TOKENS,
 }
 
 CATEGORY_COLORS = {
@@ -161,47 +154,15 @@ def cid(value: str) -> str:
     return f"{ID_PREFIX}-{value}"
 
 
-def normalize_theme(theme: str | None) -> str:
-    return "dark" if theme == "dark" else "light"
-
-
 def apply_runtime_theme(fig: go.Figure, theme: str | None = "light") -> go.Figure:
-    theme_name = normalize_theme(theme)
-    tokens = THEME_TOKENS[theme_name]
-    themed = go.Figure(fig)
-    themed.update_layout(
-        template="plotly_dark" if theme_name == "dark" else PLOT_TEMPLATE,
-        paper_bgcolor=tokens["card"],
-        plot_bgcolor=tokens["card"],
-        font=dict(family=FONT_FAMILY, size=12, color=tokens["ink"]),
-        hoverlabel=dict(bgcolor=tokens["hover_bg"], bordercolor="rgba(0,142,91,0.45)", font_size=12),
-        legend=dict(
-            font=dict(color=tokens["muted"]),
-            bgcolor=tokens["legend_bg"],
-            bordercolor="rgba(0,142,91,0.28)",
-        ),
+    # Общая реализация в theme.py; вкладка ГТМ передаёт свои light-токены и шаблоны.
+    return shared_apply_runtime_theme(
+        fig,
+        theme,
+        tokens_map=THEME_TOKENS,
+        font_family=FONT_FAMILY,
+        templates={"light": PLOT_TEMPLATE, "dark": "plotly_dark"},
     )
-    axis_names = [
-        axis_name
-        for axis_name in themed.to_plotly_json().get("layout", {})
-        if axis_name.startswith(("xaxis", "yaxis"))
-    ]
-    for axis_name in axis_names:
-        if axis_name.startswith(("xaxis", "yaxis")):
-            themed.update_layout(
-                **{
-                    axis_name: dict(
-                        gridcolor=tokens["grid"],
-                        linecolor=tokens["border"],
-                        tickcolor=tokens["border"],
-                        tickfont=dict(color=tokens["muted"]),
-                        title=dict(font=dict(color=tokens["muted"])),
-                    )
-                }
-            )
-    for annotation in themed.layout.annotations or ():
-        annotation.update(font=dict(color=tokens["muted"]))
-    return themed
 
 
 def _resolve_data_path(value: str) -> Path:
@@ -446,10 +407,6 @@ def dropdown_options(series: pd.Series, all_label: str) -> list[dict]:
     return [{"label": all_label, "value": ALL}] + [{"label": str(v), "value": v} for v in values]
 
 
-def safe_first(s: pd.Series, default=np.nan):
-    return s.iloc[0] if len(s) else default
-
-
 # -----------------------------------------------------------------------------
 # Подготовка данных
 # -----------------------------------------------------------------------------
@@ -468,49 +425,6 @@ def normalize_result_df(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = pd.to_numeric(out[col], errors="coerce")
 
     return out
-
-
-def calc_delta_per_gtm(group: pd.DataFrame) -> pd.Series:
-    """Расчёт прироста для одной ГТМ: среднее после 1-3 мес минус база до ГТМ."""
-    before = group[group["month_offset"] < 0]
-    after_1_3 = group[group["month_offset"].isin([1, 2, 3])]
-
-    if before.empty:
-        qliq_before = qoil_before = 0.0
-    elif before["month_offset"].min() <= -36:
-        # Бизнес-правило из исходного кода: если есть очень далёкая история, базу не используем.
-        qliq_before = qoil_before = 0.0
-    else:
-        last_3_before = before[before["month_offset"].isin([-3, -2, -1])]
-        base = last_3_before if not last_3_before.empty else before.loc[[before["month_offset"].idxmax()]]
-        qliq_before = base["qliq"].mean()
-        qoil_before = base["qoil"].mean()
-
-    if not after_1_3.empty:
-        after = after_1_3
-    else:
-        after_any = group[group["month_offset"] > 0]
-        if after_any.empty:
-            return pd.Series({
-                "Δqliq": np.nan,
-                "Δqoil": np.nan,
-                "gtm_year": safe_first(group["gtm_year"]),
-                "назначение": safe_first(group.get("назнач_скв_факт", pd.Series(dtype=object)), "Не указано"),
-                "направление": safe_first(group.get("направление", pd.Series(dtype=object))),
-                "mest": safe_first(group.get("mest", pd.Series(dtype=object))),
-                "plosh": safe_first(group.get("plosh", pd.Series(dtype=object))),
-            })
-        after = after_any.loc[[after_any["month_offset"].idxmin()]]
-
-    return pd.Series({
-        "Δqliq": after["qliq"].mean() - qliq_before,
-        "Δqoil": after["qoil"].mean() - qoil_before,
-        "gtm_year": safe_first(group["gtm_year"]),
-        "назначение": safe_first(group.get("назнач_скв_факт", pd.Series(dtype=object)), "Не указано"),
-        "направление": safe_first(group.get("направление", pd.Series(dtype=object))),
-        "mest": safe_first(group.get("mest", pd.Series(dtype=object))),
-        "plosh": safe_first(group.get("plosh", pd.Series(dtype=object))),
-    })
 
 
 def _group_metric_mean(df: pd.DataFrame, keys: list[str], value_columns: list[str], suffix: str) -> pd.DataFrame:
@@ -1124,6 +1038,11 @@ def fig_histogram(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None
 
 
 
+# Таблица неэффективных ГТМ отдаётся клиенту целиком (native-фильтры DataTable
+# работают на переданных данных), поэтому ограничиваем её худшими операциями.
+BAD_GTM_TABLE_MAX_ROWS = 300
+
+
 def make_bad_gtm_table(gtm_level: pd.DataFrame) -> tuple[list[dict], list[dict]]:
     if gtm_level.empty or "effective" not in gtm_level.columns:
         return [], []
@@ -1131,6 +1050,7 @@ def make_bad_gtm_table(gtm_level: pd.DataFrame) -> tuple[list[dict], list[dict]]
     table = (
         gtm_level[gtm_level["effective"].ne(1)]
         .sort_values("Δqoil")
+        .head(BAD_GTM_TABLE_MAX_ROWS)
         .assign(
             **{
                 "Дата ГТМ": lambda x: pd.to_datetime(x["gtm_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
@@ -1637,6 +1557,12 @@ def layout():
     )
 
 
+def _cached_gtm_figure(name: str, params: dict, builder):
+    """Кэш фигур вкладки ГТМ (L1 + Redis) с сигнатурой gtm-parquet в ключе."""
+    payload = {**params, "gtm_signature": [list(entry) for entry in _dataset_signature()]}
+    return figure_service.get_cached_figure(name, (), (), payload, builder)
+
+
 def register_callbacks(app):
     @app.callback(
         Output(cid("block-filter"), "options"),
@@ -1680,25 +1606,33 @@ def register_callbacks(app):
         filtered_gtm = apply_efficiency_algorithm(filter_df(dataset.gtm_level, direction, plosh, mest, block), efficiency_algorithm)
         direction_values = _selected_values(direction)
 
+        slice_params = {
+            "direction": _selected_values(direction),
+            "plosh": _selected_values(plosh),
+            "mest": _selected_values(mest),
+            "block": _selected_values(block),
+        }
+        algo_params = {**slice_params, "algorithm": normalize_efficiency_algorithm(efficiency_algorithm)}
+
         table_data, table_columns = make_bad_gtm_table(filtered_gtm)
         if direction_values:
             production_counts = empty_figure("Гистограмма доступна при выборе всех направлений", height=430)
             injection_counts = empty_figure("Гистограмма доступна при выборе всех направлений", height=430)
         else:
-            production_counts = fig_gtm_direction_counts(filtered_gtm, "production")
-            injection_counts = fig_gtm_direction_counts(filtered_gtm, "injection")
+            production_counts = _cached_gtm_figure("gtm-prod-counts", algo_params, lambda: fig_gtm_direction_counts(filtered_gtm, "production"))
+            injection_counts = _cached_gtm_figure("gtm-inj-counts", algo_params, lambda: fig_gtm_direction_counts(filtered_gtm, "injection"))
 
         return (
             make_kpi_cards(filtered_gtm),
             apply_runtime_theme(production_counts, theme),
             apply_runtime_theme(injection_counts, theme),
-            apply_runtime_theme(fig_delta_and_counts(filtered_gtm), theme),
-            apply_runtime_theme(fig_efficiency(filtered_gtm), theme),
-            apply_runtime_theme(fig_dynamics_by_year(filtered_result), theme),
-            apply_runtime_theme(fig_cumulative_dynamics(filtered_result), theme),
+            apply_runtime_theme(_cached_gtm_figure("gtm-delta-counts", algo_params, lambda: fig_delta_and_counts(filtered_gtm)), theme),
+            apply_runtime_theme(_cached_gtm_figure("gtm-efficiency", algo_params, lambda: fig_efficiency(filtered_gtm)), theme),
+            apply_runtime_theme(_cached_gtm_figure("gtm-dynamics-by-year", slice_params, lambda: fig_dynamics_by_year(filtered_result)), theme),
+            apply_runtime_theme(_cached_gtm_figure("gtm-cumulative-dynamics", slice_params, lambda: fig_cumulative_dynamics(filtered_result)), theme),
             table_data,
             table_columns,
-            apply_runtime_theme(fig_boxplot_factors(direction, plosh, dataset, mest, block), theme),
+            apply_runtime_theme(_cached_gtm_figure("gtm-boxplot-factors", slice_params, lambda: fig_boxplot_factors(direction, plosh, dataset, mest, block)), theme),
         )
 
     @app.callback(
@@ -1710,7 +1644,18 @@ def register_callbacks(app):
         Input("theme-store", "data"),
     )
     def update_histogram(plosh=ALL, mest=ALL, block=ALL_BLOCK_VALUE, hist_type="traditional", theme="light"):
-        return apply_runtime_theme(fig_histogram(plosh, hist_type, get_gtm_dataset(), mest, block), theme)
+        params = {
+            "plosh": _selected_values(plosh),
+            "mest": _selected_values(mest),
+            "block": _selected_values(block),
+            "hist_type": hist_type,
+        }
+        figure = _cached_gtm_figure(
+            "gtm-histogram",
+            params,
+            lambda: fig_histogram(plosh, hist_type, get_gtm_dataset(), mest, block),
+        )
+        return apply_runtime_theme(figure, theme)
 
     @app.callback(
         Output(cid("well-history-filter"), "options"),

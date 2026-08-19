@@ -15,8 +15,16 @@ from cache_backend import (
 )
 from config import settings
 from filter_utils import normalize_filter_values
-from normalization import ALL_BLOCK_VALUE, AREA_COL_YEAR, AREA_COL_MONTH, BLOCK_COL, INCLUDE_BLOCK_ROWS_VALUE, MEST_COL, normalize_data
-
+from normalization import (
+    ALL_BLOCK_VALUE,
+    AREA_COL_MONTH,
+    AREA_COL_YEAR,
+    BLOCK_COL,
+    INCLUDE_BLOCK_ROWS_VALUE,
+    MEST_COL,
+    normalize_data,
+    validate_area_ngdu_uniqueness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +44,17 @@ def _parquet_dataset_version():
 def _load_parquet_year_data():
     df2 = pd.read_parquet(settings.parquet_monthly_path)
     dfy = pd.read_parquet(settings.parquet_yearly_path)
+    try:
+        conflicts = validate_area_ngdu_uniqueness(df2)
+        if not conflicts.empty:
+            # normalize_data молча берёт первое НГДУ для конфликтной площади —
+            # без этого предупреждения расхождение в данных незаметно.
+            logger.warning(
+                "Areas mapped to more than one NGDU (first one wins): %s",
+                conflicts.to_dict("records"),
+            )
+    except Exception:
+        logger.exception("Area/NGDU uniqueness validation failed")
     _, normalized_year = normalize_data(df2, dfy, area_col_month=AREA_COL_MONTH, area_col_year=AREA_COL_YEAR)
     return normalized_year
 

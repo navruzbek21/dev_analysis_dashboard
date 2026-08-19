@@ -6,7 +6,6 @@ from config import settings
 from filter_utils import normalize_filter_values
 from services import data_service
 
-
 logger = logging.getLogger(__name__)
 
 

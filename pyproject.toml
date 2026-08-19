@@ -1,0 +1,25 @@
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+exclude = ["legacy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+# E501: исторически длинные строки layout/фигур; сокращаем по мере рефакторинга.
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "analytics_tools",
+    "cache_backend",
+    "config",
+    "filter_utils",
+    "gtm_analysis",
+    "litellm_console",
+    "normalization",
+    "services",
+    "theme",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

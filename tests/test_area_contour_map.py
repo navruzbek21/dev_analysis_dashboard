@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import pandas as pd
 
 import app
-
 from app import AREA_COL_YEAR, area_metric_contour_map, main_tab_layout
 
 

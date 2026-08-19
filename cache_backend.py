@@ -7,7 +7,6 @@ from threading import RLock
 
 from config import CODE_CACHE_VERSION, settings
 
-
 logger = logging.getLogger(__name__)
 
 try:
