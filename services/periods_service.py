@@ -10,6 +10,7 @@ import pandas as pd
 from cache_backend import build_cache_key, dataframe_from_bytes, dataframe_to_bytes, get_or_compute, versioned_payload
 from config import settings
 from normalization import AREA_COL_YEAR
+from filter_utils import normalize_filter_values
 from services import data_service
 
 
@@ -167,10 +168,10 @@ def period_result_from_bytes(data):
 
 
 def get_wc_kiz_periods(selected_ngdu, selected_areas, selected_mest=(), selected_blocks=(), n_periods=6, min_size=5):
-    selected_ngdu = data_service.normalize_filter_values(selected_ngdu)
-    selected_areas = data_service.normalize_filter_values(selected_areas)
-    selected_mest = data_service.normalize_filter_values(selected_mest)
-    selected_blocks = data_service.normalize_filter_values(selected_blocks)
+    selected_ngdu = normalize_filter_values(selected_ngdu)
+    selected_areas = normalize_filter_values(selected_areas)
+    selected_mest = normalize_filter_values(selected_mest)
+    selected_blocks = normalize_filter_values(selected_blocks)
     dataset_version = data_service.get_dataset_version_cached()
     key = build_cache_key(
         "wc_kiz_periods",

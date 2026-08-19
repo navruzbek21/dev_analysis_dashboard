@@ -16,7 +16,7 @@ try:
     from sklearn.linear_model import LinearRegression
 except ImportError:
     LinearRegression = None
-from dash import Dash, dcc, html, Input, Output, State, ctx
+from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
@@ -229,6 +229,25 @@ def compact(value):
     if av >= 100:
         return f"{value:.0f}"
     return f"{value:.1f}" if value % 1 else f"{value:.0f}"
+
+
+def _weighted_wc(frame: pd.DataFrame) -> float:
+    """Обводнённость среза, взвешенная по добыче: 100·(Qж − Qн)/Qж по суммам.
+
+    Невзвешенное среднее обводнённостей площадей систематически искажает
+    обводнённость актива, когда площади сильно различаются по добыче.
+    Фоллбэк — среднее по колонке wc, если добычи в срезе нет.
+    """
+    if frame.empty:
+        return np.nan
+    if {"dobycha_liq", "dobycha_nefti"}.issubset(frame.columns):
+        liq = pd.to_numeric(frame["dobycha_liq"], errors="coerce").sum(min_count=1)
+        oil = pd.to_numeric(frame["dobycha_nefti"], errors="coerce").sum(min_count=1)
+        if pd.notna(liq) and pd.notna(oil) and liq > 0:
+            return float(100 * (liq - oil) / liq)
+    if "wc" in frame.columns:
+        return frame["wc"].mean()
+    return np.nan
 
 
 def format_visible_pct_label(value) -> str:
@@ -2349,10 +2368,17 @@ def select_area_or_block_from_map(map_click):
 @app.callback(
     Output("selected-block-store", "data", allow_duplicate=True),
     Input("asset-block-filter", "value"),
+    State("selected-block-store", "data"),
     prevent_initial_call=True,
 )
-def sync_selected_block_from_asset_filter(asset_block):
-    return _normalize_block_value(asset_block)
+def sync_selected_block_from_asset_filter(asset_block, stored_block):
+    # Store и dropdown блока обновляют друг друга; без проверки на равенство
+    # цепочка store -> options/value -> store зацикливается и лишний раз
+    # дёргает тяжёлые графики вкладки актива.
+    new_value = _normalize_block_value(asset_block)
+    if new_value == _normalize_block_value(stored_block):
+        raise PreventUpdate
+    return new_value
 
 
 @app.callback(
@@ -2377,15 +2403,17 @@ def update_header(selected_mest, selected_ngdu, selected_areas):
     cur = d[d["year"] == ly]
     prev = d[d["year"] == ly - 1]
 
-    oil = cur["dobycha_nefti"].sum() if "dobycha_nefti" in cur.columns else np.nan
-    liq = cur["dobycha_liq"].sum() if "dobycha_liq" in cur.columns else np.nan
-    inj = cur["zakachka"].sum() if "zakachka" in cur.columns else np.nan
-    wc_val = cur["wc"].mean() if "wc" in cur.columns else np.nan
+    # min_count=1: сумма полностью пустой колонки должна давать NaN и "—" на
+    # карточке, а не вводящий в заблуждение ноль.
+    oil = cur["dobycha_nefti"].sum(min_count=1) if "dobycha_nefti" in cur.columns else np.nan
+    liq = cur["dobycha_liq"].sum(min_count=1) if "dobycha_liq" in cur.columns else np.nan
+    inj = cur["zakachka"].sum(min_count=1) if "zakachka" in cur.columns else np.nan
+    wc_val = _weighted_wc(cur)
 
-    p_oil = prev["dobycha_nefti"].sum() if "dobycha_nefti" in prev.columns and not prev.empty else np.nan
-    p_liq = prev["dobycha_liq"].sum() if "dobycha_liq" in prev.columns and not prev.empty else np.nan
-    p_inj = prev["zakachka"].sum() if "zakachka" in prev.columns and not prev.empty else np.nan
-    p_wc = prev["wc"].mean() if "wc" in prev.columns and not prev.empty else np.nan
+    p_oil = prev["dobycha_nefti"].sum(min_count=1) if "dobycha_nefti" in prev.columns and not prev.empty else np.nan
+    p_liq = prev["dobycha_liq"].sum(min_count=1) if "dobycha_liq" in prev.columns and not prev.empty else np.nan
+    p_inj = prev["zakachka"].sum(min_count=1) if "zakachka" in prev.columns and not prev.empty else np.nan
+    p_wc = _weighted_wc(prev)
 
     by_year = aggregation_service.get_header_year_aggregate(ngdu_key, area_key, mest_key).rename(
         columns={"dobycha_nefti": "oil", "dobycha_liq": "liq", "zakachka": "inj"}
@@ -2433,8 +2461,9 @@ def render_tab(active_tab):
     Input("ngdu-filter", "value"),
     Input("area-filter", "value"),
     Input("selected-block-store", "data"),
+    State("asset-block-filter", "value"),
 )
-def update_asset_block_options(selected_mest, selected_ngdu, selected_areas, selected_block):
+def update_asset_block_options(selected_mest, selected_ngdu, selected_areas, selected_block, current_value):
     mest_key = _filter_key(selected_mest, ALL_MEST_VALUE)
     ngdu_key = _filter_key(selected_ngdu, ALL_NGDU_VALUE)
     area_key = _filter_key(selected_areas, ALL_AREAS_VALUE)
@@ -2443,6 +2472,10 @@ def update_asset_block_options(selected_mest, selected_ngdu, selected_areas, sel
     selected = _normalize_block_value(selected_block)
     if selected not in {option["value"] for option in options}:
         selected = ALL_BLOCK_VALUE
+    # Не переустанавливаем value без необходимости: setProps триггерит
+    # колбэки даже при неизменном значении и раскручивает цикл со store.
+    if selected == _normalize_block_value(current_value):
+        return options, no_update
     return options, selected
 
 

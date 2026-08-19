@@ -751,7 +751,7 @@ def gtm_structure(params: dict[str, Any]) -> ToolResult:
     else:
         data = data.copy()
         data["year"] = pd.to_numeric(data["year"], errors="coerce")
-        data = data[data["year"].ge(2021)].copy()
+        data = data[data["year"].ge(gtm_analysis.GTM_HIST_MIN_YEAR)].copy()
         data["Категория"] = data["Категория"].replace({"base_dob": "Базовая добыча"})
         data = data.groupby(["year", "Категория"], as_index=False)["Добыча нефти, тонн"].sum()
         data = data.sort_values(["year", "Категория"])

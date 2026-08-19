@@ -3,6 +3,7 @@ from copy import deepcopy
 
 from cache_backend import build_cache_key, get_or_compute, json_from_bytes, json_to_bytes, versioned_payload
 from config import settings
+from filter_utils import normalize_filter_values
 from services import data_service
 
 
@@ -16,8 +17,8 @@ def _figure_to_json_dict(figure):
 
 
 def get_cached_figure(figure_name, selected_ngdu, selected_areas, params, builder, use_lock=False):
-    selected_ngdu = data_service.normalize_filter_values(selected_ngdu)
-    selected_areas = data_service.normalize_filter_values(selected_areas)
+    selected_ngdu = normalize_filter_values(selected_ngdu)
+    selected_areas = normalize_filter_values(selected_areas)
     dataset_version = data_service.get_dataset_version_cached()
     key = build_cache_key(
         "figure",

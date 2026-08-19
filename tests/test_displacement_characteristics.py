@@ -30,7 +30,9 @@ def test_asset_year_aggregate_keeps_displacement_inputs():
     assert {"kin", "vnf_nak", "vnf_tek", "dobycha_nefti_cum", "dobycha_vody_cum", "dobycha_liq_cum"}.issubset(aggregate.columns)
     first_year = aggregate.loc[aggregate["year"] == 2020].iloc[0]
     assert first_year["kin"] == 15.0
-    assert first_year["vnf_tek"] == 2.0
+    # ВНФ актива считается из сумм (вода/нефть), а не как среднее отношений
+    # по площадям: (5 + 10) / (5 + 10) = 1.0.
+    assert first_year["vnf_tek"] == 1.0
     assert first_year["dobycha_nefti_cum"] == 150.0
     assert first_year["dobycha_liq_cum"] == 650.0
     assert first_year["dobycha_vody_cum"] == 500.0

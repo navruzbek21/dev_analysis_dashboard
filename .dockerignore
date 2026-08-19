@@ -1,0 +1,16 @@
+.git
+.gitignore
+.github
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+tests/
+legacy/
+docs/
+*.md
+docker-compose*.yml
+Dockerfile
+.dockerignore
+.env
+requirements-dev.txt

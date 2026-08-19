@@ -2,7 +2,9 @@ import os
 from dataclasses import dataclass
 
 
-CODE_CACHE_VERSION = os.getenv("CODE_CACHE_VERSION", "dashboard-cache-v1")
+# Меняйте версию при изменении семантики расчётов: она входит в каждый
+# кэш-ключ и разом инвалидирует устаревшие значения в Redis.
+CODE_CACHE_VERSION = os.getenv("CODE_CACHE_VERSION", "dashboard-cache-v2")
 
 
 def _get_int(name, default):

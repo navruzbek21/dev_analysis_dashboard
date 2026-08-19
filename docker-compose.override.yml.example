@@ -1,0 +1,13 @@
+# Скопируйте в docker-compose.override.yml для локальной разработки.
+# docker compose автоматически подхватит override-файл.
+services:
+  app:
+    volumes:
+      - .:/app
+    environment:
+      APP_DEBUG: "true"
+    command: ["python", "app.py"]
+
+  redis:
+    ports:
+      - "6379:6379"

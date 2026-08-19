@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dash import dcc, html, Input, Output, dash_table
+from dash import dcc, html, Input, Output, State, dash_table
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import plotly.express as px
@@ -50,6 +50,9 @@ EFFICIENCY_OPTIONS = [
 ]
 APP_TITLE = "Анализ эффективности ГТМ"
 APP_SUBTITLE = "Приросты, эффективность, динамика и структура дополнительной добычи"
+# Первый год, попадающий в гистограмму структуры добычи; используется
+# и в фильтре, и в заголовке (в т.ч. в analytics_tools), чтобы они не расходились.
+GTM_HIST_MIN_YEAR = 2021
 PLOT_TEMPLATE = "plotly_white"
 ID_PREFIX = "gtm"
 APP_DIR = Path(__file__).resolve().parent
@@ -1081,14 +1084,17 @@ def fig_histogram(plosh=ALL, hist_type="traditional", dataset: GtmDataset | None
     data = prepare_hist_data(plosh, hist_type, dataset, mest, block)
     data = data[data["Добыча нефти, тонн"].notna()].copy()
 
-    # Гистограмма только с 2020 года
     data["year"] = pd.to_numeric(data["year"], errors="coerce")
-    data = data[data["year"] >= 2021].copy()
+    data = data[data["year"] >= GTM_HIST_MIN_YEAR].copy()
 
     if data.empty:
-        return empty_figure("Нет данных для гистограммы с 2020 года")
+        return empty_figure(f"Нет данных для гистограммы с {GTM_HIST_MIN_YEAR} года")
 
-    title = "Кумулятивная структура добычи с 2020 года" if hist_type == "cumulative" else "Структура добычи в год проведения ГТМ с 2020 года"
+    title = (
+        f"Кумулятивная структура добычи с {GTM_HIST_MIN_YEAR} года"
+        if hist_type == "cumulative"
+        else f"Структура добычи в год проведения ГТМ с {GTM_HIST_MIN_YEAR} года"
+    )
     data["Категория"] = data["Категория"].replace({"base_dob": "Базовая добыча"})
     category_order = ["Базовая добыча"] + [c for c in CATEGORY_COLORS if c != "base_dob"]
     color_map = {**CATEGORY_COLORS, "Базовая добыча": CATEGORY_COLORS["base_dob"]}
@@ -1638,14 +1644,17 @@ def register_callbacks(app):
         Input("ngdu-filter", "value"),
         Input("area-filter", "value"),
         Input("mest-filter", "value"),
+        State(cid("block-filter"), "value"),
     )
-    def update_gtm_block_options(ngdu=ALL, plosh=ALL, mest=ALL):
+    def update_gtm_block_options(ngdu=ALL, plosh=ALL, mest=ALL, current_block=ALL_BLOCK_VALUE):
         ngdu_values = _selected_values(ngdu)
         plosh_values = _selected_values(plosh)
         mest_values = _selected_values(mest)
         blocks = data_service.get_block_options(ngdu_values, plosh_values, mest_values)
         options = [{"label": "Вся площадь", "value": ALL_BLOCK_VALUE}] + [{"label": f"Блок {block}", "value": block} for block in blocks]
-        return options, ALL_BLOCK_VALUE
+        allowed = {option["value"] for option in options}
+        value = current_block if current_block in allowed else ALL_BLOCK_VALUE
+        return options, value
 
     @app.callback(
         Output(cid("kpi-row"), "children"),

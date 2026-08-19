@@ -11,9 +11,16 @@ INCLUDE_BLOCK_ROWS_VALUE = "__INCLUDE_BLOCK_ROWS__"
 
 
 def safe_div(a, b):
+    """Деление с NaN вместо деления на ноль/пропуск.
+
+    Работает и для Series, и для ndarray, и для скаляров: pd.isna, в отличие
+    от Series.isna, не падает, когда знаменатель оказался скалярным NaN
+    (например, из df.get("col", np.nan) при отсутствующей колонке).
+    """
     a = pd.to_numeric(a, errors="coerce")
     b = pd.to_numeric(b, errors="coerce")
-    return np.where((b == 0) | b.isna(), np.nan, a / b)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where((b == 0) | pd.isna(b), np.nan, a / b)
 
 
 def validate_area_ngdu_uniqueness(df2, area_col_month=AREA_COL_MONTH):

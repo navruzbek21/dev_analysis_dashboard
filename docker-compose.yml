@@ -13,17 +13,24 @@ services:
       AREA_CONTOURS_DIR: area_contours
       LITELLM_BASE_URL: https://litellm.tatneft.guru
       LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_CA_BUNDLE: ${LITELLM_CA_BUNDLE-}
       LITELLM_AUTH_HEADER_NAME: ${LITELLM_AUTH_HEADER_NAME:-Authorization}
       LITELLM_AUTH_HEADER_PREFIX: ${LITELLM_AUTH_HEADER_PREFIX-}
       LITELLM_DEFAULT_MODEL: ${LITELLM_DEFAULT_MODEL:-default}
       LITELLM_ALLOWED_MODELS: ${LITELLM_ALLOWED_MODELS:-default}
     depends_on:
       - redis
-    volumes:
-      - .:/app
+    # Для локальной разработки с горячей заменой кода создайте
+    # docker-compose.override.yml (см. docker-compose.override.yml.example):
+    # прод-образ должен исполнять код, собранный в образ, а не bind-mount.
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
+    # Порт наружу не публикуем: приложению внутри compose-сети он доступен
+    # по имени сервиса, а незапароленный Redis на хосте — лишняя поверхность атаки.
     command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
