@@ -1,0 +1,1111 @@
+<title>Промплощадка дашборда</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#E9EDE6;
+  --surface:#F8FAF5;
+  --surface-2:#F1F4EC;
+  --ink:#0F1813;
+  --ink-2:#3B4841;
+  --ink-3:#6A7871;
+  --rule:#C9D2C6;
+  --rule-2:#DDE3D9;
+  --tat:#008E5B;
+  --mint:#5FAE8B;
+  --azure:#4A8DC4;
+  --slate:#5A6B82;
+  --ember:#CE2F32;
+  --amber:#DB7128;
+  --ground:#DFE5DA;
+  --ground-2:#D5DCCE;
+  --shadow:rgba(15,24,19,.13);
+  --glow:rgba(255,255,255,.55);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0B110E;
+    --surface:#121A16;
+    --surface-2:#182119;
+    --ink:#E4EDE6;
+    --ink-2:#A5B5AC;
+    --ink-3:#74857B;
+    --rule:#25322B;
+    --rule-2:#1D2822;
+    --tat:#2CBD86;
+    --mint:#7FCCAB;
+    --azure:#72B0E2;
+    --slate:#8DA0BA;
+    --ember:#F0666A;
+    --amber:#EE9B54;
+    --ground:#151E19;
+    --ground-2:#1B2620;
+    --shadow:rgba(0,0,0,.5);
+    --glow:rgba(255,255,255,.08);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0B110E;
+  --surface:#121A16;
+  --surface-2:#182119;
+  --ink:#E4EDE6;
+  --ink-2:#A5B5AC;
+  --ink-3:#74857B;
+  --rule:#25322B;
+  --rule-2:#1D2822;
+  --tat:#2CBD86;
+  --mint:#7FCCAB;
+  --azure:#72B0E2;
+  --slate:#8DA0BA;
+  --ember:#F0666A;
+  --amber:#EE9B54;
+  --ground:#151E19;
+  --ground-2:#1B2620;
+  --shadow:rgba(0,0,0,.5);
+  --glow:rgba(255,255,255,.08);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font:400 16px/1.6 "IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{font-family:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;font-weight:700;text-wrap:balance;margin:0}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+
+.wrap{max-width:1620px;margin:0 auto;padding:0 28px}
+
+/* ---------- title block ---------- */
+.sheet{
+  border-bottom:1px solid var(--rule);
+  background:var(--surface);
+}
+.sheet-in{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:28px;
+  align-items:end;
+  padding:34px 28px 22px;
+  max-width:1620px;
+  margin:0 auto;
+}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--tat);margin-bottom:12px;
+}
+h1{font-size:clamp(32px,4.4vw,54px);line-height:1.02;letter-spacing:-.015em}
+.lede{margin:14px 0 0;max-width:62ch;color:var(--ink-2);font-size:16.5px}
+.stamp{
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;line-height:1.9;
+  color:var(--ink-3);text-align:right;white-space:nowrap;
+  border-left:1px solid var(--rule);padding-left:22px;
+}
+.stamp b{color:var(--ink-2);font-weight:500}
+@media(max-width:860px){
+  .sheet-in{grid-template-columns:1fr}
+  .stamp{text-align:left;border-left:0;border-top:1px solid var(--rule);padding:14px 0 0}
+}
+
+/* ---------- path selector ---------- */
+.routes{padding:26px 0 0}
+.routes-head{
+  display:flex;justify-content:space-between;align-items:baseline;
+  gap:18px;flex-wrap:wrap;margin-bottom:13px;
+}
+.routes-head h2{font-size:14px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.hint{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-3)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;
+  padding:8px 14px;border-radius:2px;cursor:pointer;
+  background:var(--surface);color:var(--ink-2);
+  border:1px solid var(--rule);
+  border-left:3px solid var(--chip,var(--ink-3));
+  transition:background .14s,color .14s,transform .14s;
+}
+.chip:hover{background:var(--surface-2);color:var(--ink)}
+.chip:focus-visible{outline:2px solid var(--tat);outline-offset:2px}
+.chip[aria-pressed="true"]{
+  background:var(--chip);color:var(--paper);border-color:var(--chip);
+}
+:root[data-theme="dark"] .chip[aria-pressed="true"],
+:root:not([data-theme="light"]) .chip[aria-pressed="true"]{color:#0B110E}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]) .chip[aria-pressed="true"]{color:#F8FAF5}}
+
+/* ---------- map + legend ---------- */
+.stage{
+  display:grid;grid-template-columns:minmax(0,1fr) 284px;gap:22px;
+  margin:16px 0 0;align-items:start;
+}
+@media(max-width:1080px){.stage{grid-template-columns:1fr}}
+
+.plate{
+  background:var(--surface);border:1px solid var(--rule);
+  border-radius:3px;overflow:hidden;
+}
+.map-box{padding:0;position:relative;overflow-x:auto}
+#map{display:block;width:100%;height:auto;min-width:900px}
+#map text{font-family:"IBM Plex Mono",ui-monospace,monospace;fill:var(--ink)}
+.bldg{cursor:pointer}
+.bldg:focus-visible{outline:none}
+.bldg:focus-visible .cap{stroke:var(--tat);stroke-width:2.5}
+
+.legend{padding:20px 20px 22px;font-size:13px}
+.legend h3{font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);margin-bottom:12px;font-weight:600}
+.legend h3+h3{margin-top:26px}
+.lg{display:flex;gap:11px;align-items:flex-start;margin-bottom:9px;line-height:1.42}
+.lg svg{flex:none;margin-top:1px}
+.lg b{font-weight:500;display:block;color:var(--ink)}
+.lg span{color:var(--ink-3);font-size:11.5px;font-family:"IBM Plex Mono",monospace}
+.scale-note{
+  margin-top:22px;padding-top:16px;border-top:1px solid var(--rule-2);
+  font-size:11.5px;line-height:1.65;color:var(--ink-3);
+}
+.scale-note b{color:var(--ink-2);font-weight:500}
+
+/* ---------- explainer ---------- */
+.explain{margin:22px 0 0;padding:26px 28px 28px}
+.explain-head{display:flex;justify-content:space-between;align-items:baseline;gap:20px;flex-wrap:wrap;border-bottom:1px solid var(--rule-2);padding-bottom:16px;margin-bottom:20px}
+.explain-head h2{font-size:26px;letter-spacing:-.01em}
+#exKind{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent,var(--tat))}
+#exSum{margin:0 0 22px;color:var(--ink-2);max-width:74ch}
+#exSum code{font-family:"IBM Plex Mono",monospace;font-size:.88em;background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--ink)}
+
+ol.hops{list-style:none;margin:0;padding:0;counter-reset:hop}
+ol.hops li{
+  display:grid;grid-template-columns:30px minmax(0,1fr);gap:16px;
+  padding:13px 0;border-top:1px solid var(--rule-2);
+}
+ol.hops li:first-child{border-top:0;padding-top:0}
+.num{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;
+  width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  background:var(--accent,var(--tat));color:var(--paper);
+}
+:root[data-theme="dark"] .num,:root:not([data-theme="light"]) .num{color:#0B110E}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]) .num{color:#F8FAF5}}
+.hop-t{font-weight:500;line-height:1.45}
+.arrow{color:var(--ink-3);padding:0 3px}
+.hop-p{
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-2);
+  margin-top:5px;line-height:1.55;word-break:break-word;
+}
+.cite{
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-3);
+  margin-top:5px;display:flex;flex-wrap:wrap;gap:4px 14px;
+}
+.tag{
+  font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;padding:2px 7px;border:1px solid var(--rule);
+  border-radius:2px;color:var(--ink-3);margin-left:8px;vertical-align:1px;
+  white-space:nowrap;
+}
+.tag.egress{color:var(--ember);border-color:var(--ember)}
+.tag.llm{color:var(--amber);border-color:var(--amber)}
+.tag.client{color:var(--mint);border-color:var(--mint)}
+
+.dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px 20px;font-size:13.5px}
+.dl dt{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-3);letter-spacing:.05em;padding-top:2px}
+.dl dd{margin:0;color:var(--ink-2)}
+.dl dd b{color:var(--ink);font-weight:500}
+
+/* ---------- findings ---------- */
+.findings{margin:44px 0 0}
+.findings h2{font-size:14px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.card{
+  background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:20px 22px 22px;border-top:3px solid var(--k,var(--tat));
+}
+.card h3{font-size:17.5px;margin-bottom:9px;letter-spacing:-.005em}
+.card p{margin:0;font-size:14px;line-height:1.62;color:var(--ink-2)}
+.card p+p{margin-top:10px}
+.card .cite{margin-top:12px}
+.card code{font-family:"IBM Plex Mono",monospace;font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--ink)}
+
+/* ---------- index ---------- */
+.index{margin:44px 0 0}
+.index h2{font-size:14px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:16px}
+.tbl-scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:660px}
+th,td{text-align:left;padding:10px 16px;border-bottom:1px solid var(--rule-2)}
+th{
+  font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:500;
+  background:var(--surface-2);position:sticky;top:0;
+}
+tbody tr:last-child td{border-bottom:0}
+td.f{font-family:"IBM Plex Mono",monospace;font-size:12.5px;white-space:nowrap}
+td.n{font-family:"IBM Plex Mono",monospace;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+td.r{color:var(--ink-2)}
+.swatch{display:inline-block;width:8px;height:8px;border-radius:1px;margin-right:9px;vertical-align:1px}
+
+footer{
+  margin-top:52px;border-top:1px solid var(--rule);background:var(--surface);
+  padding:22px 0 40px;
+}
+footer .wrap{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-3);line-height:1.85}
+
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="sheet">
+  <div class="sheet-in">
+    <div>
+      <div class="eyebrow">Изометрическая карта системы</div>
+      <h1>Промплощадка дашборда</h1>
+      <p class="lede">Dash-приложение анализа разработки месторождений, разложенное по площадке: высота корпуса — объём модуля в строках, форма — род инфраструктуры, маршруты — реальные пути управления и данных между файлами.</p>
+    </div>
+    <div class="stamp">
+      репозиторий &nbsp;<b>dev_analysis_dashboard</b><br>
+      ветка &nbsp;<b>claude/isometric-system-map-tccdon</b><br>
+      HEAD &nbsp;<b>98ffdeb</b><br>
+      корпусов &nbsp;<b>33</b> &nbsp;·&nbsp; маршрутов &nbsp;<b>6</b><br>
+      python на карте &nbsp;<b>7 164 стр.</b>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+
+  <section class="routes">
+    <div class="routes-head">
+      <h2>Маршрут</h2>
+      <div class="hint">выберите маршрут — или кликните по корпусу на площадке</div>
+    </div>
+    <div class="chips" id="chips" role="group" aria-label="Выбор маршрута"></div>
+  </section>
+
+  <div class="stage">
+    <div class="plate map-box">
+      <svg id="map" role="img" aria-label="Изометрическая карта дашборда: браузер, процесс Gunicorn с маршрутами Flask, слой колбэков, слой сервисов, двухуровневый кэш и хранилище parquet, а также шлюз LiteLLM за периметром приложения."></svg>
+    </div>
+
+    <aside class="plate legend">
+      <h3>Форма корпуса</h3>
+      <div class="lg"><svg width="26" height="30" viewBox="0 0 26 30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.1" opacity=".85"><path d="M13 3 24 9.5 13 16 2 9.5Z"/><path d="M2 9.5v11L13 27V16"/><path d="M24 9.5v11L13 27"/></g></svg><div><b>Башня</b><span>python-модуль, высота = строки</span></div></div>
+      <div class="lg"><svg width="26" height="30" viewBox="0 0 26 30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.1" opacity=".85"><ellipse cx="13" cy="10" rx="10" ry="5"/><path d="M3 10v8a10 5 0 0 0 20 0v-8"/></g></svg><div><b>Резервуар</b><span>сетевое хранилище — Redis</span></div></div>
+      <div class="lg"><svg width="26" height="30" viewBox="0 0 26 30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.1" opacity=".85"><path d="M13 6 23 11 13 16 3 11Z"/><path d="M3 14 13 19 23 14"/><path d="M3 17 13 22 23 17"/></g></svg><div><b>Пласты</b><span>файл на диске — parquet, контуры</span></div></div>
+      <div class="lg"><svg width="26" height="30" viewBox="0 0 26 30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.1" opacity=".85"><path d="M13 10 23 15 13 20 3 15Z"/><path d="M3 15v3l10 5 10-5v-3"/></g></svg><div><b>Площадка</b><span>малый модуль, конфиг, состояние</span></div></div>
+      <div class="lg"><svg width="26" height="30" viewBox="0 0 26 30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.1" opacity=".85"><path d="M13 8 23 13 13 18 3 13Z"/><path d="M3 13v4l10 5 10-5v-4"/><path d="M13 25 25 19M1 19 13 25" stroke-dasharray="2 2"/></g></svg><div><b>За периметром</b><span>участок вне приложения</span></div></div>
+
+      <h3>Назначение</h3>
+      <div class="lg" id="lgClient"><svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="3" width="24" height="8" rx="1"/></svg><div><b>Браузер</b><span>клиентский документ</span></div></div>
+      <div class="lg" id="lgApp"><svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="3" width="24" height="8" rx="1"/></svg><div><b>Серверный код</b><span>процесс, колбэки, сервисы, фигуры</span></div></div>
+      <div class="lg" id="lgCache"><svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="3" width="24" height="8" rx="1"/></svg><div><b>Кэш</b><span>L1 в процессе + L2 Redis</span></div></div>
+      <div class="lg" id="lgStore"><svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="3" width="24" height="8" rx="1"/></svg><div><b>Хранилище</b><span>parquet и контуры на диске</span></div></div>
+      <div class="lg" id="lgLlm"><svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="3" width="24" height="8" rx="1"/></svg><div><b>Недетерминированное</b><span>планировщик на LLM</span></div></div>
+      <div class="lg" id="lgExt"><svg width="26" height="14" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="3" width="24" height="8" rx="1"/></svg><div><b>Внешний узел</b><span>шлюз за периметром</span></div></div>
+
+      <h3>Связи</h3>
+      <div class="lg"><svg width="26" height="12" viewBox="0 0 26 12" aria-hidden="true"><path d="M1 6h22" stroke="currentColor" stroke-width="2" fill="none"/><path d="M25 6 19 3.2v5.6Z" fill="currentColor"/></svg><div><b>Вызов</b><span>управление и данные внутри процесса</span></div></div>
+      <div class="lg"><svg width="26" height="12" viewBox="0 0 26 12" aria-hidden="true"><path d="M1 6h22" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3" fill="none"/><path d="M25 6 19 3.2v5.6Z" fill="currentColor"/></svg><div><b>Через браузер</b><span>HTTP, postMessage, localStorage</span></div></div>
+      <div class="lg" id="lgEg"><svg width="26" height="12" viewBox="0 0 26 12" aria-hidden="true"><path d="M1 6h22" stroke="currentColor" stroke-width="2.4" fill="none"/><path d="M25 6 19 3.2v5.6Z" fill="currentColor"/></svg><div><b>Выход наружу</b><span>пересекает периметр, несёт токен</span></div></div>
+
+      <div class="scale-note">
+        <b>Шкала высот.</b> Высота башни = 22 + 0,085 × строк, с потолком 135&nbsp;px:
+        без него <span class="mono">gtm_analysis.py</span> (1&nbsp;686 строк) закрывал бы соседей.
+        Самая низкая башня — <span class="mono">figure_service.py</span>, 46 строк.
+        Резервуар, пласты и площадки высоту не кодируют.
+      </div>
+    </aside>
+  </div>
+
+  <section class="plate explain" id="panel">
+    <div class="explain-head">
+      <h2 id="exTitle"></h2>
+      <div id="exKind"></div>
+    </div>
+    <p id="exSum"></p>
+    <div id="exBody"></div>
+  </section>
+
+  <section class="findings">
+    <h2>Что видно с площадки</h2>
+    <div class="cards">
+
+      <article class="card" style="--k:var(--azure)">
+        <h3>Ключ кэша — это версия данных плюс версия кода</h3>
+        <p>Каждый ключ собирается как <code>prefix:namespace:sha256(payload)</code>, где payload всегда содержит <code>dataset_version</code> и <code>code_version</code>. Первое — строка вида <code>parquet:df2.parquet:&lt;mtime&gt;:&lt;size&gt;|…</code>, поэтому подмена файла на диске обесценивает все ключи сама, без рестарта и без ручной чистки.</p>
+        <p>Второе — переменная окружения <code>CODE_CACHE_VERSION</code>. Поверх этого каждое пространство имён несёт собственную версию алгоритма: <code>asset-year-v4-weighted</code>, <code>wc-kiz-dp-linear-sse-v2-block</code>, <code>plotly-figure-cache-v1</code>. Меняется семантика расчёта — двигается только своя ветка кэша.</p>
+        <div class="cite">cache_backend.py:85 · cache_backend.py:219 · config.py:6 · services/data_service.py:32</div>
+      </article>
+
+      <article class="card" style="--k:var(--azure)">
+        <h3>L1 живёт в воркере, а воркеров два</h3>
+        <p><code>local_cache</code> — это <code>TTLCache</code> на уровне модуля, то есть по одному экземпляру на процесс. Контейнер поднимает gunicorn с <code>--workers 2</code>, значит L1-кэшей физически два, и они не знают друг о друге: один и тот же срез может быть посчитан дважды, по разу на воркер.</p>
+        <p>Общий тир ровно один — Redis. Он же и снимает дубль работы: тяжёлые загрузчики берут распределённую блокировку <code>key:lock</code>, поэтому параллельный расчёт одного среза схлопывается в один.</p>
+        <div class="cite">cache_backend.py:54 · cache_backend.py:202 · Dockerfile:23 · services/data_service.py:246</div>
+      </article>
+
+      <article class="card" style="--k:var(--amber)">
+        <h3>LLM выбирает инструмент, но не касается данных</h3>
+        <p>В режиме анализа модель вызывается дважды и оба раза мимо данных. Первый вызов возвращает JSON вида <code>{"tool":…,"params":…}</code>; <code>_normalize_plan</code> прижимает <code>tool</code> к списку <code>ALLOWED_TOOLS</code> из шести имён, а метрику — к <code>ALLOWED_METRICS</code>. Всё, что не прошло, молча становится <code>metric_dynamics</code>.</p>
+        <p>Считает затем обычный pandas по parquet. Второй вызов модели получает уже готовый результат — не более 30 строк — и пишет по нему текст. Промпт прямо запрещает SQL, а на случай недоступного шлюза рядом лежит правиловый план и детерминированное объяснение.</p>
+        <div class="cite">analytics_tools.py:36 · analytics_tools.py:210 · analytics_tools.py:232 · litellm_console.py:221</div>
+      </article>
+
+      <article class="card" style="--k:var(--ember)">
+        <h3>Токен уходит наружу и не откатывается на слабый TLS</h3>
+        <p>Прокси ходит на <code>litellm.tatneft.guru</code> под серверным токеном из <code>LITELLM_API_KEY</code> — пользовательский токен в схеме не участвует вовсе. При провале проверки сертификата код не пытается переподключиться без верификации: он возвращает ошибку и предлагает указать корпоративный CA через <code>LITELLM_CA_BUNDLE</code>.</p>
+        <p>Периметр держат три ограничителя: лимит 20 запросов за 60 с по <code>X-Forwarded-For</code>, потолки 32 000 символов на запрос и 40 сообщений в истории, и белый список моделей. Лимитер — тоже in-memory, то есть на воркер, и с двумя воркерами фактический потолок вдвое выше номинала.</p>
+        <div class="cite">litellm_console.py:37 · litellm_console.py:49 · litellm_console.py:163 · litellm_console.py:270</div>
+      </article>
+
+      <article class="card" style="--k:var(--tat)">
+        <h3>Тема накладывается после кэша, а не до</h3>
+        <p>Колбэки кладут в кэш «сырые», нетемизированные фигуры, и лишь потом накрывают их <code>apply_runtime_theme(fig, theme)</code>. Поэтому переключение светлой и тёмной темы не пересчитывает ни один график: все четыре фигуры главной вкладки и шесть фигур вкладки актива приходят из L1 или Redis, а тема стоит поверх дёшево.</p>
+        <p>Консоль LiteLLM живёт в отдельном документе внутри iframe и о смене темы узнаёт через clientside-колбэк с <code>postMessage</code>, а не опросом <code>localStorage</code> по таймеру.</p>
+        <div class="cite">callbacks/main.py:152 · callbacks/asset.py:102 · callbacks/theme_callbacks.py:37</div>
+      </article>
+
+      <article class="card" style="--k:var(--slate)">
+        <h3>Один parquet читают два независимых загрузчика</h3>
+        <p><code>df_ploshad_year.parquet</code> открывают и <code>data_service._load_parquet_year_data</code>, и <code>gtm_analysis._load_gtm_dataset</code> — каждый со своим <code>lru_cache</code>, своей сигнатурой файла и своей нормализацией. В памяти воркера это два разных кадра из одного файла.</p>
+        <p>Слой анализа добавляет третий путь: <code>analytics_tools._read_parquet_cached</code> читает месячный и годовой parquet напрямую, в обход сервисов, для таблиц <code>monthly_raw</code> и <code>yearly_raw</code>. Сервисный слой такие срезы не видит и не кэширует.</p>
+        <div class="cite">services/data_service.py:43 · gtm_analysis.py:186 · analytics_tools.py:521 · analytics_tools.py:607</div>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="index">
+    <h2>Указатель корпусов</h2>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Корпус</th><th>Файл</th><th style="text-align:right">Строк</th><th>Роль на площадке</th></tr></thead>
+        <tbody id="idxBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Высоты корпусов измерены по <span class="mono">wc -l</span> на коммите 98ffdeb. Ссылки вида <span class="mono">файл:строка</span> указывают на определение, а не на место вызова.<br>
+    Площадка описывает рантайм, а не структуру каталогов: <span class="mono">tests/</span>, <span class="mono">scripts/</span>, <span class="mono">legacy/</span> и <span class="mono">docs/</span> на карту не вынесены.
+  </div>
+</footer>
+
+<script>
+(function(){
+"use strict";
+
+var HW = 30, HH = 18;
+
+var PAL = {
+  light:{client:"#5FAE8B",app:"#008E5B",cache:"#4A8DC4",store:"#5A6B82",llm:"#DB7128",ext:"#CE2F32",
+         ground:"#DFE5DA",groundLine:"#C2CDBC",ink:"#0F1813",ink3:"#6A7871",plate:"#F8FAF5",dark:"#0B1410"},
+  dark:{client:"#7FCCAB",app:"#2CBD86",cache:"#72B0E2",store:"#8DA0BA",llm:"#EE9B54",ext:"#F0666A",
+         ground:"#182119",groundLine:"#26332B",ink:"#E4EDE6",ink3:"#74857B",plate:"#121A16",dark:"#04period"}
+};
+PAL.dark.dark = "#040806";
+
+// ---- buildings -------------------------------------------------------------
+// gx,gy = grid origin (back corner); w,d = footprint; loc = lines of code.
+var N = [
+  // BROWSER
+  {id:"shell",  label:"Каркас Dash",  sub:"layouts.py",     gx:-4, gy:3, w:4,d:3, loc:349,  kind:"tower", cls:"client", dist:"Браузер",
+   file:"layouts.py:284", role:"SPA-каркас: шапка, четыре вкладки, три хранилища состояния.",
+   detail:"shell_layout() строит весь документ: KPI-шапку, dbc.Tabs с вкладками tab-main / tab-asset / tab-gtm / tab-litellm и контейнер scenario-content, в который render_tab подставляет layout выбранной вкладки. index_string подменён, чтобы подтянуть Montserrat с Google Fonts.",
+   links:["app.py:81 — app.layout = shell_layout()","callbacks/filters.py:148 — render_tab наполняет scenario-content"]},
+
+  {id:"stores", label:"dcc.Store ×3", sub:"состояние",      gx:1, gy:0, w:2,d:2, kind:"pad", h:16, cls:"client", dist:"Браузер",
+   file:"layouts.py:287", role:"Состояние клиента: тема, срез фильтров, выбранный блок.",
+   detail:"theme-store и dashboard-analysis-filters лежат в localStorage и переживают перезагрузку; selected-block-store — в sessionStorage. dashboard-analysis-filters здесь не декоративен: именно из него iframe консоли читает текущий срез дашборда, дотягиваясь до localStorage родительского документа.",
+   links:["callbacks/filters.py:35 — sync_analysis_filters_store пишет срез","templates/litellm_console.html:867 — iframe читает его из window.parent"]},
+
+  {id:"console",label:"Консоль LiteLLM",sub:"iframe",       gx:4, gy:-3, w:3,d:3, loc:1278, kind:"tower", cls:"client", dist:"Браузер",
+   file:"templates/litellm_console.html", role:"Отдельный документ в iframe: чат и режим анализа.",
+   detail:"Шаблон читается с диска на каждый запрос страницы, поэтому правится без рестарта. Внутри — собственный localStorage под историю диалога, чтение фильтров у родителя и приём темы через postMessage. Клиентский таймаут выставлен на LITELLM_TIMEOUT + 5 с, чтобы не бросать запрос, который upstream ещё считает.",
+   links:["litellm_console.py:88 — _load_template читает файл на каждый запрос","litellm_console.py:248 — render_page подставляет модель и таймаут"]},
+
+  // PROCESS / EDGE
+  {id:"gunicorn",label:"Gunicorn",     sub:"2×4, --preload",gx:-2, gy:9, w:4,d:2, kind:"pad", h:26, cls:"app", dist:"Процесс",
+   file:"Dockerfile:20", role:"Два воркера по четыре потока, форк после импорта.",
+   detail:"--preload импортирует приложение до форка, поэтому модульное состояние — клиент Redis, lru_cache загрузчиков parquet — создаётся один раз и наследуется обоими воркерами. Но всё, что накапливается после форка (L1-кэш, окно рейт-лимитера), у каждого воркера своё. Таймаут 180 с покрывает длинные запросы к LiteLLM.",
+   links:["cache_backend.py:82 — redis_client создаётся на уровне модуля","docker-compose.yml:2 — сервис app, порт 8048"]},
+
+  {id:"flask",  label:"Flask",        sub:"app.py",         gx:3, gy:5, w:3,d:3, loc:114,  kind:"tower", cls:"app", dist:"Процесс",
+   file:"app.py:78", role:"WSGI-сервер под Dash; на нём же висят служебные маршруты.",
+   detail:"server = app.server достаёт flask-приложение из Dash, после чего litellm_console.register_routes(server) навешивает на него маршруты консоли, а декораторы @server.route — /health и /ready. Здесь же по порядку регистрируются все пять групп колбэков.",
+   links:["app.py:79 — register_routes(server)","app.py:83 — регистрация колбэков: theme, filters, main, asset, gtm"]},
+
+  {id:"routes", label:"Маршруты",     sub:"/health /ready", gx:7, gy:1, w:3,d:2, kind:"pad", h:20, cls:"app", dist:"Процесс",
+   file:"app.py:90", role:"Служебные и прокси-маршруты поверх Flask.",
+   detail:"/health отвечает всегда. /ready проверяет Redis пингом и версию датасета, отдавая 503, если версии нет. Тонкость: поле parquet в ответе — константа True (app.py:97), реально файлы проверяет только dataset_version, который для отсутствующего файла даёт строку …:missing, а не пустоту.",
+   links:["app.py:95 — /ready","cache_backend.py:229 — check_redis_connection","services/data_service.py:32 — _parquet_dataset_version"]},
+
+  {id:"proxy",  label:"Прокси LiteLLM",sub:"litellm_console.py",gx:11, gy:-3, w:3,d:3, loc:299, kind:"tower", cls:"app", dist:"Процесс",
+   file:"litellm_console.py:259", role:"Три маршрута консоли, рейт-лимит, TLS, оркестрация анализа.",
+   detail:"Отдаёт страницу консоли, health и POST /litellm-console/api. На входе — скользящее окно 20 запросов за 60 с по X-Forwarded-For, потолок в 32 000 символов, белый список моделей. Режим chat проксирует запрос как есть; режим analysis уходит в run_analysis с двумя обращениями к модели вокруг детерминированного расчёта.",
+   links:["litellm_console.py:268 — обработчик /litellm-console/api","litellm_console.py:221 — run_analysis","litellm_console.py:141 — forward"]},
+
+  // OUTSIDE THE PERIMETER
+  {id:"litellm",label:"LiteLLM",      sub:"litellm.tatneft.guru",gx:19, gy:-5, w:4,d:3, kind:"tower", h:42, cls:"ext", dist:"Вне периметра",
+   file:"litellm_console.py:24", role:"Внешний шлюз чат-моделей; единственный узел за периметром.",
+   detail:"POST /v1/chat/completions под серверным токеном. Имя и префикс заголовка авторизации настраиваются (LITELLM_AUTH_HEADER_NAME / _PREFIX) — шлюз не обязан быть Bearer-совместимым. При ошибке проверки сертификата код осознанно не откатывается на соединение без верификации: по нему уходит токен.",
+   links:["litellm_console.py:163 — отказ от отката на непроверенный TLS","litellm_console.py:112 — make_ctx и LITELLM_CA_BUNDLE","docker-compose.yml:14 — адрес шлюза в окружении"]},
+
+  // CALLBACKS
+  {id:"cbf",    label:"filters",      sub:"callbacks/",     gx:3, gy:13, w:3,d:2, loc:182, kind:"tower", cls:"app", dist:"Колбэки",
+   file:"callbacks/filters.py:26", role:"Каскад глобальных фильтров, выбор вкладки, клик по карте.",
+   detail:"sync_global_filters пересобирает варианты месторождений → НГДУ → площадей по цепочке и умеет сам переключить вкладку: выбор ровно одной площади уводит на tab-asset. Отдельный колбэк ловит clickData карты и достаёт из customdata площадь и блок. Ещё один сверяет store и выпадающий список блока на равенство — без этой проверки пара зацикливается.",
+   links:["callbacks/filters.py:63 — sync_global_filters","callbacks/filters.py:122 — select_area_or_block_from_map","callbacks/filters.py:138 — защита от цикла store ↔ dropdown"]},
+
+  {id:"cbm",    label:"main",         sub:"callbacks/",     gx:6, gy:9, w:3,d:2, loc:157, kind:"tower", cls:"app", dist:"Колбэки",
+   file:"callbacks/main.py:34", role:"KPI-шапка и четыре фигуры главной вкладки.",
+   detail:"update_header считает четыре карточки за последний год против предыдущего, с min_count=1 — сумма пустой колонки должна давать прочерк, а не ноль. update_main берёт один надмножественный срез с блоками и режет его в памяти, вместо двух обращений к сервису, затем строит четыре фигуры через кэш.",
+   links:["callbacks/main.py:42 — update_header","callbacks/main.py:111 — update_main","callbacks/main.py:117 — один срез с INCLUDE_BLOCK_ROWS_VALUE"]},
+
+  {id:"cba",    label:"asset",        sub:"callbacks/",     gx:9, gy:5, w:3,d:2, loc:208, kind:"tower", cls:"app", dist:"Колбэки",
+   file:"callbacks/asset.py:25", role:"Вкладка актива: шесть фигур, доп. метрики, характеристики вытеснения.",
+   detail:"Каждая фигура строится через safe_build: падение построителя даёт заглушку, а не пятисотку на весь колбэк. Характеристики вытеснения вынесены в MATCH-колбэк — движение слайдера периода пересчитывает одну карточку из восьми, а не всю вкладку.",
+   links:["callbacks/asset.py:39 — update_asset","callbacks/asset.py:116 — доп. метрики по кнопке","callbacks/asset.py:166 — MATCH-колбэк характеристик"]},
+
+  {id:"cbt",    label:"theme",        sub:"callbacks/",     gx:14, gy:6, w:2,d:2, loc:56,  kind:"tower", cls:"app", dist:"Колбэки",
+   file:"callbacks/theme_callbacks.py:10", role:"Переключение темы и трансляция её в iframe.",
+   detail:"Серверный колбэк меняет theme-store и класс оболочки. Clientside-колбэк рассылает всем iframe.litellm-console-frame сообщение {type:\"dashboard-theme\"} строго на window.location.origin — консоль не опрашивает localStorage по таймеру.",
+   links:["callbacks/theme_callbacks.py:37 — clientside postMessage","theme.py:98 — apply_runtime_theme"]},
+
+  {id:"gtm",    label:"gtm_analysis", sub:"вкладка ГТМ",    gx:-1, gy:17, w:3,d:3, loc:1686, kind:"tower", cls:"app", dist:"Колбэки",
+   file:"gtm_analysis.py:1566", role:"Самостоятельная вкладка: свои данные, фигуры, колбэки и палитра.",
+   detail:"Единственный модуль, который сам себе и загрузчик данных, и построитель фигур, и слой колбэков. Держит четыре собственных parquet, считает gtm_level один раз при загрузке и кэширует фигуры под своей сигнатурой файлов. Глобальные фильтры площади и месторождения слушает вместе со всеми, блок — свой собственный.",
+   links:["gtm_analysis.py:186 — _load_gtm_dataset","gtm_analysis.py:448 — precompute_gtm_level","gtm_analysis.py:1560 — _cached_gtm_figure"]},
+
+  // ANALYSIS WING
+  {id:"tools",  label:"analytics_tools",sub:"инструменты",  gx:15, gy:2, w:3,d:3, loc:1121, kind:"tower", cls:"llm", dist:"Анализ",
+   file:"analytics_tools.py:223", role:"Шесть инструментов анализа, план и детерминированное объяснение.",
+   detail:"Собирает промпт для планировщика, разбирает ответ модели, прижимает его к белым спискам и исполняет обычным pandas. Умеет читать месячный и годовой parquet напрямую, минуя сервисный слой, и рисует SVG-графики прямо в питоне — консоль получает готовую картинку, а не спецификацию plotly.",
+   links:["analytics_tools.py:96 — make_plan_prompt","analytics_tools.py:552 — table_analysis","analytics_tools.py:909 — _svg_chart","analytics_tools.py:1114 — _TOOL_HANDLERS"]},
+
+  // FIGURES WING
+  {id:"figmain",label:"main_tab",     sub:"figures/",       gx:4, gy:20, w:3,d:3, loc:447, kind:"tower", cls:"app", dist:"Фигуры",
+   file:"figures/main_tab.py:302", role:"Карта площадей по контурам, столбцы изменений, линии, кроссплот.",
+   detail:"area_metric_contour_map — единственное место, где приложение читает не parquet, а IRAP ASCII: контуры площадей и блоков из каталога area_contours. Сигнатура каталога (путь, mtime, размер каждого файла) входит в ключ кэша фигуры, поэтому подложенный контур подхватывается без рестарта.",
+   links:["figures/main_tab.py:191 — _contours_dir","figures/main_tab.py:200 — _contours_signature","figures/main_tab.py:223 — _load_area_contours_cached"]},
+
+  {id:"figasset",label:"asset_tab",   sub:"figures/",       gx:1, gy:24, w:3,d:3, loc:561, kind:"tower", cls:"app", dist:"Фигуры",
+   file:"figures/asset_tab.py", role:"Технологическая динамика, фонды, сегментация по периодам.",
+   detail:"Самый крупный модуль фигур. Держит ADDITIONAL_ANALYSIS_SPECS — декларативный список дополнительных графиков, по которому колбэк разворачивает и выходы, и построение, так что новый график добавляется одной строкой спецификации.",
+   links:["callbacks/asset.py:108 — выходы разворачиваются из ADDITIONAL_ANALYSIS_SPECS"]},
+
+  {id:"figdisp",label:"displacement", sub:"figures/",       gx:8, gy:23, w:3,d:3, loc:460, kind:"tower", cls:"app", dist:"Фигуры",
+   file:"figures/displacement.py", role:"Восемь характеристик вытеснения с настраиваемым периодом.",
+   detail:"Пересчёт поверхностных объёмов в пластовые опирается на плотности и объёмные коэффициенты нефти и воды — они вынесены в настройки, потому что значения по умолчанию верны для текущего актива и для другого месторождения задаются через окружение.",
+   links:["config.py:60 — displacement_target_vnf и плотности","app.py:37 — реэкспорт для тестов"]},
+
+  {id:"theme",  label:"theme",        sub:"theme.py",       gx:4, gy:28, w:3,d:2, loc:202, kind:"tower", cls:"app", dist:"Фигуры",
+   file:"theme.py:98", role:"Палитра, шаблоны plotly, наложение темы на готовую фигуру.",
+   detail:"apply_runtime_theme принимает карту токенов и шаблонов, поэтому вкладка ГТМ подставляет собственную светлую палитру Татнефти в ту же реализацию. Ключевое свойство: тема применяется к уже посчитанной фигуре, а значит не участвует в ключе кэша.",
+   links:["gtm_analysis.py:157 — вкладка ГТМ переиспользует реализацию","callbacks/main.py:152 — тема поверх кэшированной фигуры"]},
+
+  {id:"common", label:"common",       sub:"common.py",      gx:9, gy:28, w:3,d:2, loc:187, kind:"tower", cls:"app", dist:"Фигуры",
+   file:"common.py", role:"Словари метрик, значения «все выбраны», KPI-карточки.",
+   detail:"Держит служебные значения ALL_MEST_VALUE / ALL_NGDU_VALUE / ALL_AREAS_VALUE и функцию _filter_key, которая превращает выбор пользователя в канонический ключ: «выбрано всё» и «не выбрано ничего» схлопываются в один и тот же пустой список, поэтому не плодят разные ключи кэша.",
+   links:["filter_utils.py:1 — normalize_filter_values","services/data_service.py:209 — нормализация на входе сервиса"]},
+
+  // SERVICES
+  {id:"svcdata",label:"data_service", sub:"services/",      gx:10, gy:13, w:3,d:3, loc:248, kind:"tower", cls:"app", dist:"Сервисы",
+   file:"services/data_service.py:208", role:"Единственная дверь к годовым данным и спискам фильтров.",
+   detail:"Загружает оба parquet под lru_cache(maxsize=1), прогоняет через normalize_data и отдаёт отфильтрованный годовой срез. Возвращает всегда глубокую копию — потребитель волен править кадр, не отравляя кэш. Тяжёлый срез берётся под распределённой блокировкой.",
+   links:["services/data_service.py:43 — _load_parquet_year_data","services/data_service.py:145 — _filter_area_level_rows","services/data_service.py:248 — copy(deep=True) на выходе"]},
+
+  {id:"svcagg", label:"aggregation",  sub:"services/",      gx:14, gy:9, w:3,d:3, loc:188, kind:"tower", cls:"app", dist:"Сервисы",
+   file:"services/aggregation_service.py:151", role:"Годовая агрегация актива со взвешенными показателями.",
+   detail:"Набор колонок условный: agg_spec собирается по фактическому составу parquet, потому что безусловная спецификация падала на усечённых датасетах. КИН актива — среднее по площадям, взвешенное геологическими запасами; ВНФ и обводнённость считаются из сумм, а невзвешенные средние остаются фоллбэком на годы без данных.",
+   links:["services/aggregation_service.py:17 — _weighted_mean_by_year","services/aggregation_service.py:166 — версия алгоритма в ключе"]},
+
+  {id:"svcper", label:"periods",      sub:"services/",      gx:19, gy:6, w:3,d:3, loc:216, kind:"tower", cls:"app", dist:"Сервисы",
+   file:"services/periods_service.py:181", role:"Разбиение истории на периоды по кривой обводнённость–КИЗ.",
+   detail:"Динамическое программирование по матрице SSE линейной регрессии для всех отрезков. Матрица считается через префиксные суммы одной векторной операцией на строку — это заменило O(n²) отдельных обучений LinearRegression. Результат — кадр плюс кортеж отрезков, поэтому в Redis он едет ZIP-архивом из parquet и meta.json.",
+   links:["services/periods_service.py:60 — segment_sse_matrix","services/periods_service.py:89 — find_best_segments","services/periods_service.py:153 — period_result_to_bytes"]},
+
+  {id:"svcfig", label:"figure",       sub:"services/",      gx:23, gy:3, w:3,d:3, loc:46,  kind:"tower", cls:"app", dist:"Сервисы",
+   file:"services/figure_service.py:18", role:"Кэш готовых фигур plotly в виде JSON.",
+   detail:"Самый маленький сервис и при этом самый горячий: любую фигуру он сводит к to_plotly_json и кладёт под ключ с именем фигуры и параметрами. Крупные фигуры мимо кэша — при превышении FIGURE_CACHE_MAX_BYTES (10 МБ) значение просто возвращается, не занимая Redis. На выходе — deepcopy, чтобы вызывающий не портил кэшированный словарь.",
+   links:["services/figure_service.py:44 — max_bytes","config.py:52 — figure_cache_max_bytes","cache_backend.py:182 — пропуск записи по размеру"]},
+
+  {id:"norm",   label:"normalization",sub:"normalization.py",gx:6, gy:17, w:3,d:2, loc:124, kind:"tower", cls:"app", dist:"Сервисы",
+   file:"normalization.py:36", role:"Сведение месячного и годового кадров, производные показатели.",
+   detail:"Подтягивает НГДУ и месторождение к площади, сворачивает месячные дебиты в годовые средние и достраивает накопленные величины. Здесь же живёт safe_div — деление, отдающее NaN вместо деления на ноль, и работающее одинаково для Series, ndarray и скаляра.",
+   links:["normalization.py:12 — safe_div","normalization.py:25 — validate_area_ngdu_uniqueness","services/data_service.py:47 — предупреждение о конфликте площадь ↔ НГДУ"]},
+
+  {id:"config", label:"config",       sub:"config.py",      gx:26, gy:0, w:2,d:2, loc:77,  kind:"pad", h:26, cls:"app", dist:"Сервисы",
+   file:"config.py:6", role:"Настройки из окружения, версия кода в ключе кэша.",
+   detail:"Замороженный dataclass, читающий окружение один раз при импорте. Парсеры _get_int / _get_float падают с внятным сообщением на нечисловом значении, а не молча берут значение по умолчанию. Единственный поддерживаемый источник данных — parquet, и validate() это утверждает явно.",
+   links:["config.py:9 — _get_int","config.py:72 — validate","cache_backend.py:8 — CODE_CACHE_VERSION в каждом ключе"]},
+
+  // CACHE
+  {id:"cachebk",label:"cache_backend",sub:"L1 + L2",        gx:15, gy:17, w:4,d:3, loc:236, kind:"tower", cls:"cache", dist:"Кэш",
+   file:"cache_backend.py:141", role:"Единая процедура «взять из кэша или посчитать».",
+   detail:"get_or_compute обходит уровни по порядку: L1 → Redis → загрузчик, и на обратном пути раскладывает значение обратно. Сериализатор передаётся вызывающим — кадры едут parquet-байтами, фигуры и списки — через orjson, периоды — ZIP-архивом. Каждое обращение к Redis обёрнуто: недоступный Redis понижает систему до L1, но не роняет.",
+   links:["cache_backend.py:85 — build_cache_key","cache_backend.py:110 — json_to_bytes с фоллбэком на PlotlyJSONEncoder","cache_backend.py:219 — versioned_payload"]},
+
+  {id:"l1",     label:"L1 TTLCache",  sub:"в процессе",     gx:11, gy:21, w:3,d:2, kind:"pad", h:24, cls:"cache", dist:"Кэш",
+   file:"cache_backend.py:54", role:"Кэш в памяти воркера: 128 значений, 60 с.",
+   detail:"cachetools.TTLCache под RLock, а при отсутствии пакета — собственная реализация _FallbackTTLCache с тем же интерфейсом. Живёт в процессе, значит существует в двух независимых экземплярах по числу воркеров. Короткий TTL здесь и нужен: L1 гасит шквал колбэков одного взаимодействия, долгое хранение — забота Redis.",
+   links:["cache_backend.py:31 — _FallbackTTLCache","config.py:54 — local_cache_ttl и local_cache_maxsize"]},
+
+  {id:"redis",  label:"Redis",        sub:"L2, общий",      gx:20, gy:13, w:3,d:3, kind:"drum", h:54, cls:"cache", dist:"Кэш",
+   file:"docker-compose.yml:27", role:"Единственный кэш, общий для обоих воркеров.",
+   detail:"redis:7 с appendonly. Порт наружу не публикуется: приложению он доступен по имени сервиса внутри compose-сети, а незапароленный Redis на хосте — лишняя поверхность атаки. Клиент создаётся на уровне модуля с таймаутами 3 и 5 с и health_check_interval=30; если пакета нет или URL пуст, клиент равен None и L2 просто отключается.",
+   links:["cache_backend.py:62 — _create_redis_client","docker-compose.yml:31 — appendonly yes","scripts/clear_old_cache.py:7 — чистка ключей по префиксу"]},
+
+  {id:"lock",   label:"Redis lock",   sub:"key:lock",       gx:24, gy:10, w:2,d:2, kind:"pad", h:20, cls:"cache", dist:"Кэш",
+   file:"cache_backend.py:202", role:"Распределённая блокировка на дорогих загрузчиках.",
+   detail:"timeout 120 с, blocking_timeout 10 с. Взяв блокировку, код перечитывает Redis — пока он ждал, значение мог положить сосед. Провал самой блокировки не фатален: считаем без неё, потеряв только защиту от дублирующей работы. Включена для срезов, агрегатов, периодов и тяжёлых фигур.",
+   links:["services/data_service.py:246","services/aggregation_service.py:182","services/periods_service.py:214","callbacks/asset.py:65 — use_lock=True на g01"]},
+
+  // STORAGE
+  {id:"pqmonth",label:"df2.parquet",  sub:"месячный",       gx:17, gy:23, w:3,d:2, kind:"strata", h:26, cls:"store", dist:"Хранилище",
+   file:"config.py:66", role:"Месячные показатели по скважинам и площадям.",
+   detail:"Источник дебитов, приёмистости и помесячной обводнённости, а также справочника «площадь → НГДУ → месторождение». Читается тремя независимыми путями: сервисным загрузчиком, слоем анализа напрямую и — через тот же файл — проверкой уникальности НГДУ. Его mtime и размер входят в каждый ключ кэша.",
+   links:["services/data_service.py:45","analytics_tools.py:609 — таблица monthly_raw","normalization.py:50 — справочник площадь → НГДУ"]},
+
+  {id:"pqyear", label:"df_ploshad_year",sub:"годовой",      gx:21, gy:19, w:3,d:2, kind:"strata", h:26, cls:"store", dist:"Хранилище",
+   file:"config.py:67", role:"Годовые показатели площадей и блоков — общий файл двух подсистем.",
+   detail:"Единственный файл, который открывают два независимых загрузчика: data_service._load_parquet_year_data и gtm_analysis._load_gtm_dataset. Каждый со своим lru_cache и своей нормализацией, так что в памяти воркера это два разных кадра из одного файла.",
+   links:["services/data_service.py:46","gtm_analysis.py:65 — тот же файл в PARQUET_FILES","analytics_tools.py:612 — таблица yearly_raw"]},
+
+  {id:"pqgtm",  label:"parquet ГТМ ×3",sub:"result_df и др.",gx:25, gy:15, w:3,d:2, kind:"strata", h:26, cls:"store", dist:"Хранилище",
+   file:"gtm_analysis.py:64", role:"Данные вкладки ГТМ: операции, итоги, факторный анализ.",
+   detail:"result_df.parquet, df_itog_gtm_2.parquet и factor_analysis_df.parquet, пути переопределяются через окружение. Загрузчик не падает на отсутствующем файле: кладёт пустой кадр и копит текст ошибки в GtmDataset.errors, который вкладка показывает предупреждением поверх графиков.",
+   links:["gtm_analysis.py:186 — _load_gtm_dataset","gtm_analysis.py:283 — data_status_alert","analytics_tools.py:615 — таблицы gtm_level, result_df, factor_analysis_df"]},
+
+  {id:"contours",label:"area_contours",sub:"IRAP ASCII",    gx:13, gy:27, w:3,d:2, kind:"strata", h:22, cls:"store", dist:"Хранилище",
+   file:"config.py:68", role:"Контуры площадей и блоков для карты — единственный не-parquet источник.",
+   detail:"Каталог текстовых файлов IRAP classic ASCII с расширениями .asc, .dat, .txt, .irap, .xyz, .csv. Имя файла несёт и площадь, и, через разделитель, номер блока. Контур короче трёх точек отбрасывается с предупреждением. Нет каталога — карта отдаёт понятную заглушку с указанием пути, а не пустоту.",
+   links:["figures/main_tab.py:223 — _load_area_contours_cached","figures/main_tab.py:304 — заглушка с путём","common.py:38 — AREA_CONTOUR_EXTENSIONS"]}
+];
+
+// ---- routes ----------------------------------------------------------------
+var R = [
+  {
+    id:"A", name:"Смена фильтра", color:"app",
+    title:"Смена фильтра — перерисовка главной вкладки",
+    kind:"горячий путь",
+    sum:"Самый частый цикл в системе. Один клик по выпадающему списку поднимает два независимых колбэка, один срез данных, четыре фигуры и до трёх уровней кэша. При полном промахе он доходит до диска и читает оба parquet; при попадании в L1 не покидает памяти воркера.",
+    hops:[
+      {f:"shell",t:"routes",p:"POST /_dash-update-component · {inputs: mest-filter, ngdu-filter, area-filter}",c:["layouts.py:73 — выпадающие списки фильтров"],tag:"client"},
+      {f:"routes",t:"cbf",p:"sync_global_filters(mest, ngdu, areas, …)",c:["callbacks/filters.py:63"]},
+      {f:"cbf",t:"svcdata",p:"get_mest_options() → get_ngdu_options(mest) → get_area_options(ngdu, mest) — каскад сужается на каждом шаге",c:["services/data_service.py:66","services/data_service.py:86","services/data_service.py:110"]},
+      {f:"routes",t:"cbm",p:"update_main(mest, ngdu, areas, metric, period, theme) — срабатывает на тех же Input, параллельно каскаду",c:["callbacks/main.py:111"]},
+      {f:"cbm",t:"svcdata",p:"get_filtered_year_data(ngdu, area, mest, [INCLUDE_BLOCK_ROWS_VALUE]) — надмножество со строками блоков, чтобы взять один срез вместо двух",c:["callbacks/main.py:117","services/data_service.py:208"]},
+      {f:"svcdata",t:"cachebk",p:"build_cache_key(\"filtered_year_data\", {dataset_version, code_version, фильтры, block_filter_version}) → get_or_compute(use_redis_lock=True)",c:["services/data_service.py:214","cache_backend.py:85"]},
+      {f:"cachebk",t:"l1",p:"TTLCache[key] — попадание завершает путь здесь, за доли миллисекунды",c:["cache_backend.py:97"]},
+      {f:"cachebk",t:"redis",p:"GET key → при промахе SETEX key ttl=3600 · тело — DataFrame, сериализованный в parquet-байты",c:["cache_backend.py:162","cache_backend.py:188","cache_backend.py:129"]},
+      {f:"cachebk",t:"pqmonth",p:"read_parquet(df2.parquet) — только при промахе обоих уровней, под lru_cache(maxsize=1)",c:["services/data_service.py:45"]},
+      {f:"cachebk",t:"pqyear",p:"read_parquet(df_ploshad_year.parquet) → normalize_data(df2, dfy)",c:["services/data_service.py:46","normalization.py:36"]},
+      {f:"cbm",t:"svcfig",p:"get_cached_figure ×4 — карта, столбцы, линии, кроссплот; в ключ входит сигнатура каталога контуров",c:["callbacks/main.py:132","callbacks/main.py:136"]},
+      {f:"svcfig",t:"figmain",p:"area_metric_contour_map(d_map, metric, area_key) · change_bar · line_year_metric · crossplot_debit_wc",c:["figures/main_tab.py:302"]},
+      {f:"figmain",t:"contours",p:"чтение IRAP classic ASCII из area_contours/ — единственный не-parquet источник на этом пути",c:["figures/main_tab.py:223"]},
+      {f:"cbm",t:"shell",p:"четыре фигуры plotly в JSON, тема наложена уже поверх кэшированных значений",c:["callbacks/main.py:152","theme.py:98"],tag:"client"}
+    ]
+  },
+  {
+    id:"B", name:"Клик по карте", color:"app",
+    title:"Клик по карте — переход к активу",
+    kind:"каскад состояния",
+    sum:"Единственный путь, где клик по фигуре меняет глобальный срез. Данные для перехода приезжают в customdata точки, а колбэк не просто пишет фильтр — он ещё и переключает вкладку, из-за чего запускается вся тяжёлая вкладка актива.",
+    hops:[
+      {f:"shell",t:"routes",p:"main-area-map.clickData · points[0].customdata = [площадь, …, блок]",c:["figures/main_tab.py:302 — customdata собирается при построении карты"],tag:"client"},
+      {f:"routes",t:"cbf",p:"select_area_or_block_from_map(clickData) — пустая customdata даёт PreventUpdate, а не исключение",c:["callbacks/filters.py:122"]},
+      {f:"cbf",t:"stores",p:"area-filter.value = [площадь] · scenario-tabs.active_tab = tab-asset · selected-block-store = блок",c:["callbacks/filters.py:129"],tag:"client"},
+      {f:"stores",t:"cba",p:"смена фильтров и вкладки поднимает update_asset — уже по новому срезу",c:["callbacks/asset.py:39"],tag:"client"},
+      {f:"cba",t:"svcdata",p:"get_filtered_year_data(ngdu, area, mest, block) — блок теперь участвует в ключе",c:["callbacks/asset.py:45"]},
+      {f:"cba",t:"svcagg",p:"get_asset_year_aggregate(...) — суммы, взвешенный по запасам КИН, ВНФ и обводнённость из сумм",c:["services/aggregation_service.py:151"]},
+      {f:"cba",t:"svcper",p:"get_wc_kiz_periods(..., n_periods=6, min_size=5) — ДП по матрице SSE, самый дорогой расчёт вкладки",c:["services/periods_service.py:181"]},
+      {f:"svcper",t:"cachebk",p:"PeriodResult не сериализуется одним куском: в Redis едет ZIP из data.parquet и meta.json, TTL 21600",c:["services/periods_service.py:153","config.py:50"]},
+      {f:"cba",t:"figasset",p:"tech_dynamics, fund_dynamics, segmented_wc_kiz, ratio_vs_q_by_wc_kiz_periods — каждая под safe_build",c:["callbacks/asset.py:49","callbacks/asset.py:56"]}
+    ]
+  },
+  {
+    id:"C", name:"Анализ на LLM", color:"llm",
+    title:"Анализ на LLM — два вызова вокруг детерминированного расчёта",
+    kind:"выход за периметр",
+    sum:"Единственный путь, покидающий периметр. Модель вызывается дважды и оба раза не видит сырых данных: сначала выбирает инструмент, потом описывает уже посчитанный результат. Между вызовами — обычный pandas по parquet, а план прижат к белому списку из шести инструментов.",
+    hops:[
+      {f:"stores",t:"console",p:"window.parent.localStorage[\"dashboard-analysis-filters\"] — iframe дотягивается до состояния родительского документа",c:["templates/litellm_console.html:867","callbacks/filters.py:35"],tag:"client"},
+      {f:"console",t:"proxy",p:"POST /litellm-console/api · {mode:\"analysis\", text, model, dashboard_filters}",c:["templates/litellm_console.html:1198","litellm_console.py:268"],tag:"client"},
+      {f:"proxy",t:"proxy",p:"привратники: 20 запросов / 60 с по X-Forwarded-For · ≤32 000 символов · модель вне LITELLM_ALLOWED_MODELS заменяется на дефолтную",c:["litellm_console.py:49","litellm_console.py:270","litellm_console.py:286"]},
+      {f:"proxy",t:"litellm",p:"вызов №1 — план · POST /v1/chat/completions под серверным токеном · промпт несёт схему инструментов и текущие фильтры дашборда",c:["litellm_console.py:223","analytics_tools.py:96","litellm_console.py:141"],tag:"egress"},
+      {f:"litellm",t:"tools",p:"{\"tool\":…,\"params\":…} → parse_plan снимает markdown-обёртку → _normalize_plan прижимает tool к ALLOWED_TOOLS, метрику к ALLOWED_METRICS",c:["analytics_tools.py:113","analytics_tools.py:210","analytics_tools.py:36"],tag:"llm"},
+      {f:"tools",t:"svcdata",p:"execute_plan → _load_table_frame(\"yearly\") — путь через сервисный слой, с кэшем",c:["analytics_tools.py:223","analytics_tools.py:607"]},
+      {f:"tools",t:"pqmonth",p:"для monthly_raw и yearly_raw — _read_parquet_cached читает файл напрямую, минуя сервисы и Redis",c:["analytics_tools.py:521","analytics_tools.py:609"]},
+      {f:"tools",t:"gtm",p:"для gtm_level, result_df, factor_analysis_df — get_gtm_dataset() из загрузчика вкладки ГТМ",c:["analytics_tools.py:615","gtm_analysis.py:226"]},
+      {f:"proxy",t:"litellm",p:"вызов №2 — объяснение · в промпт уходит не более 30 строк результата и сводка, с запретом додумывать причины",c:["litellm_console.py:242","analytics_tools.py:232"],tag:"egress"},
+      {f:"proxy",t:"console",p:"{rows, columns, chart, explanation, plan_source} · график — SVG, собранный в питоне, а не спецификация plotly",c:["analytics_tools.py:304","analytics_tools.py:909"],tag:"client"}
+    ]
+  },
+  {
+    id:"D", name:"Пустой срез", color:"llm",
+    title:"Пустой срез — повтор без фильтров дашборда",
+    kind:"ветка восстановления",
+    sum:"Короткая, но важная ветка внутри анализа. Если план, унаследовавший фильтры дашборда, дал ноль строк, прокси не отдаёт пустой ответ: он повторяет расчёт без этих фильтров и, если получилось, помечает результат явной оговоркой.",
+    hops:[
+      {f:"tools",t:"proxy",p:"requires_deterministic_explanation(result) — истина, когда строк нет или результат нечем объяснять",c:["analytics_tools.py:249"]},
+      {f:"proxy",t:"proxy",p:"has_selected_dashboard_filters(dashboard_filters) — повтор имеет смысл, только если фильтры вообще были выбраны",c:["analytics_tools.py:324","litellm_console.py:230"]},
+      {f:"proxy",t:"tools",p:"make_analysis_plan(text, None, raw_llm_plan) — тот же план модели, но без контекста дашборда; повторного вызова LLM не происходит",c:["litellm_console.py:232"]},
+      {f:"tools",t:"svcdata",p:"execute_plan(base_plan) — второй проход по данным",c:["analytics_tools.py:223"]},
+      {f:"proxy",t:"console",p:"with_note(...) добавляет строку «Фильтры текущего дашборда не дали строк; показан срез без этих фильтров»",c:["litellm_console.py:234","analytics_tools.py:330"],tag:"client"},
+      {f:"proxy",t:"console",p:"если и это не помогло — fallback_explanation собирает текст из чисел без участия модели",c:["litellm_console.py:244","analytics_tools.py:256"],tag:"client"}
+    ]
+  },
+  {
+    id:"E", name:"Смена темы", color:"client",
+    title:"Смена темы — перерисовка без пересчёта",
+    kind:"клиентский путь",
+    sum:"Показательный маршрут: тема проходит через все колбэки фигур, но ни одного расчёта не запускает. Фигуры кэшируются нетемизированными, поэтому переключение обслуживается из L1, а iframe консоли узнаёт о смене напрямую из браузера, не заходя на сервер.",
+    hops:[
+      {f:"shell",t:"routes",p:"theme-toggle.n_clicks",c:["layouts.py:305"],tag:"client"},
+      {f:"routes",t:"cbt",p:"toggle_theme — инвертирует значение и пишет в theme-store (localStorage)",c:["callbacks/theme_callbacks.py:12"]},
+      {f:"cbt",t:"shell",p:"app-shell.className = \"shell theme-dark\" · подпись и title кнопки",c:["callbacks/theme_callbacks.py:21"],tag:"client"},
+      {f:"cbt",t:"console",p:"clientside postMessage {type:\"dashboard-theme\", theme} строго на window.location.origin — минуя сервер",c:["callbacks/theme_callbacks.py:37"],tag:"client"},
+      {f:"routes",t:"cbm",p:"theme-store — Input всех фигурных колбэков, поэтому update_main и update_asset поднимаются заново",c:["callbacks/main.py:109","callbacks/asset.py:37"]},
+      {f:"cbm",t:"svcfig",p:"ключ фигуры темы не содержит — все четыре значения приходят из L1 попаданием",c:["services/figure_service.py:22"]},
+      {f:"cbm",t:"theme",p:"apply_runtime_theme(fig, theme) поверх готовой фигуры: подменяются шаблон, цвета осей и подложка",c:["callbacks/main.py:152","theme.py:98"]}
+    ]
+  },
+  {
+    id:"F", name:"Готовность", color:"cache",
+    title:"Готовность — что именно проверяет /ready",
+    kind:"эксплуатация",
+    sum:"Пробы делят обязанности: /health отвечает всегда и годится для liveness, /ready трогает зависимости и умеет вернуть 503. Внутри — ровно две проверки, и решение о готовности принимает только одна из них.",
+    hops:[
+      {f:"routes",t:"cachebk",p:"check_redis_connection() → PING · результат попадает в ответ, но на код статуса не влияет",c:["app.py:98","cache_backend.py:229"]},
+      {f:"cachebk",t:"redis",p:"PING по клиенту с socket_connect_timeout=3 · клиента нет — сразу False, без исключения",c:["cache_backend.py:62"]},
+      {f:"routes",t:"svcdata",p:"get_dataset_version_cached() — единственная проверка, решающая исход: нет версии, значит 503",c:["app.py:100","app.py:104"]},
+      {f:"svcdata",t:"pqmonth",p:"os.path.getmtime + getsize · отсутствующий файл даёт часть строки вида «df2.parquet:missing»",c:["services/data_service.py:32"]},
+      {f:"svcdata",t:"pqyear",p:"та же сигнатура по годовому файлу — из них и склеивается dataset_version, входящий в каждый ключ кэша",c:["services/data_service.py:40","cache_backend.py:219"]},
+      {f:"routes",t:"shell",p:"{status, parquet, redis, dataset_version} · поле parquet — константа True, файлы за него отвечает dataset_version",c:["app.py:97","app.py:105"],tag:"client"}
+    ]
+  }
+];
+
+// ---- helpers ---------------------------------------------------------------
+var NB = {}; N.forEach(function(n){ NB[n.id] = n; });
+function H(n){ return n.h != null ? n.h : Math.min(135, 22 + (n.loc||0) * 0.085); }
+function iso(gx,gy){ return [(gx-gy)*HW, (gx+gy)*HH]; }
+function hex2rgb(h){ return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
+function mix(a,b,t){
+  var A=hex2rgb(a), B=hex2rgb(b);
+  return "#"+[0,1,2].map(function(i){
+    var v=Math.round(A[i]+(B[i]-A[i])*t).toString(16);
+    return v.length<2?"0"+v:v;
+  }).join("");
+}
+function el(tag,attrs,txt){
+  var e=document.createElementNS("http://www.w3.org/2000/svg",tag);
+  for(var k in attrs) if(attrs[k]!=null) e.setAttribute(k,attrs[k]);
+  if(txt!=null) e.textContent=txt;
+  return e;
+}
+function pts(a){ return a.map(function(p){return p[0].toFixed(1)+","+p[1].toFixed(1);}).join(" "); }
+function isDark(){
+  var t=document.documentElement.getAttribute("data-theme");
+  if(t==="dark") return true;
+  if(t==="light") return false;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function center(n){ // roof centre, screen coords
+  var c=iso(n.gx+n.w/2, n.gy+n.d/2);
+  return [c[0], c[1]-H(n)];
+}
+function base(n){ var c=iso(n.gx+n.w/2, n.gy+n.d/2); return [c[0], c[1]]; }
+
+// ---- state -----------------------------------------------------------------
+var state = { route:"A", node:null };
+var svg = document.getElementById("map");
+
+// ---- render ----------------------------------------------------------------
+function render(){
+  var P = isDark() ? PAL.dark : PAL.light;
+  var route = R.filter(function(r){return r.id===state.route;})[0];
+  var active = {};
+  if(route) route.hops.forEach(function(h){ active[h.f]=1; active[h.t]=1; });
+  if(state.node) active[state.node]=1;
+
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+  var defs = el("defs");
+  ["app","client","cache","store","llm","ext","ink"].forEach(function(k){
+    var col = k==="ink" ? P.ink3 : P[k];
+    var m = el("marker",{id:"ar-"+k,viewBox:"0 0 10 10",refX:"9",refY:"5",
+      markerWidth:"4.6",markerHeight:"4.6",orient:"auto-start-reverse"});
+    m.appendChild(el("path",{d:"M0 0.6 L10 5 L0 9.4 Z",fill:col}));
+    defs.appendChild(m);
+  });
+  svg.appendChild(defs);
+
+  var gGround = el("g"), gShadow = el("g"), gBldg = el("g"),
+      gLabel = el("g"), gEdge = el("g"), gTop = el("g");
+  svg.appendChild(gGround); svg.appendChild(gShadow); svg.appendChild(gBldg);
+  svg.appendChild(gEdge); svg.appendChild(gLabel); svg.appendChild(gTop);
+
+  // --- ground plane -----------------------------------------------------
+  // The buildings occupy a diagonal band, so a plain grid rectangle would
+  // render as a diamond with three-quarters of it empty. Clip that rectangle
+  // against the band's own bounds and the plot hugs the site instead.
+  var M=3;
+  var b={gx0:1e9,gx1:-1e9,gy0:1e9,gy1:-1e9,s0:1e9,s1:-1e9,d0:1e9,d1:-1e9};
+  N.forEach(function(n){
+    [[n.gx,n.gy],[n.gx+n.w,n.gy],[n.gx+n.w,n.gy+n.d],[n.gx,n.gy+n.d]].forEach(function(c){
+      b.gx0=Math.min(b.gx0,c[0]); b.gx1=Math.max(b.gx1,c[0]);
+      b.gy0=Math.min(b.gy0,c[1]); b.gy1=Math.max(b.gy1,c[1]);
+      b.s0=Math.min(b.s0,c[0]+c[1]); b.s1=Math.max(b.s1,c[0]+c[1]);
+      b.d0=Math.min(b.d0,c[0]-c[1]); b.d1=Math.max(b.d1,c[0]-c[1]);
+    });
+  });
+  function clip(poly,f){
+    var out=[];
+    for(var i=0;i<poly.length;i++){
+      var A=poly[i], B=poly[(i+1)%poly.length], fa=f(A), fb=f(B);
+      if(fa>=0) out.push(A);
+      if((fa>=0)!==(fb>=0)){
+        var t=fa/(fa-fb);
+        out.push([A[0]+(B[0]-A[0])*t, A[1]+(B[1]-A[1])*t]);
+      }
+    }
+    return out;
+  }
+  var plot=[[b.gx0-M,b.gy0-M],[b.gx1+M,b.gy0-M],[b.gx1+M,b.gy1+M],[b.gx0-M,b.gy1+M]];
+  plot=clip(plot,function(p){return (p[0]+p[1])-(b.s0-M);});
+  plot=clip(plot,function(p){return (b.s1+M)-(p[0]+p[1]);});
+  plot=clip(plot,function(p){return (p[0]-p[1])-(b.d0-M);});
+  plot=clip(plot,function(p){return (b.d1+M)-(p[0]-p[1]);});
+  var planePts=plot.map(function(p){return iso(p[0],p[1]);});
+  gGround.appendChild(el("polygon",{points:pts(planePts),fill:P.ground,
+    stroke:P.groundLine,"stroke-width":1.4}));
+
+  var gGrid=el("g");
+  gGround.appendChild(gGrid);
+  function span(lo,hi,a,b2){ return [Math.max(lo,a), Math.min(hi,b2)]; }
+  for(var g=Math.floor(b.gx0-M); g<=Math.ceil(b.gx1+M); g+=2){
+    var r=span(b.gy0-M, b.gy1+M, (b.s0-M)-g, (b.s1+M)-g);
+    r=span(r[0], r[1], g-(b.d1+M), g-(b.d0-M));
+    if(r[1]-r[0]<=0.01) continue;
+    var a=iso(g,r[0]), bb2=iso(g,r[1]);
+    gGrid.appendChild(el("line",{x1:a[0],y1:a[1],x2:bb2[0],y2:bb2[1],stroke:P.groundLine,"stroke-width":.7,opacity:.55}));
+  }
+  for(var g2=Math.floor(b.gy0-M); g2<=Math.ceil(b.gy1+M); g2+=2){
+    var r2=span(b.gx0-M, b.gx1+M, (b.s0-M)-g2, (b.s1+M)-g2);
+    r2=span(r2[0], r2[1], (b.d0-M)+g2, (b.d1+M)+g2);
+    if(r2[1]-r2[0]<=0.01) continue;
+    var a2=iso(r2[0],g2), b2=iso(r2[1],g2);
+    gGrid.appendChild(el("line",{x1:a2[0],y1:a2[1],x2:b2[0],y2:b2[1],stroke:P.groundLine,"stroke-width":.7,opacity:.55}));
+  }
+  // area-contour motif, echoing the IRAP contours the app itself renders
+  var ccx=(b.gx0+b.gx1)/2, ccy=(b.gy0+b.gy1)/2;
+  [9,13.5,18].forEach(function(rad,i){
+    var p=[];
+    for(var a3=0;a3<44;a3++){
+      var th=a3/44*Math.PI*2;
+      var wob=1+0.17*Math.sin(th*3+i)+0.09*Math.cos(th*5-i*1.4);
+      var qx=ccx+rad*wob*Math.cos(th), qy=ccy+rad*wob*Math.sin(th);
+      if(qx+qy<b.s0-M||qx+qy>b.s1+M||qx-qy<b.d0-M||qx-qy>b.d1+M) return;
+      p.push(iso(qx,qy));
+    }
+    gGrid.appendChild(el("polygon",{points:pts(p),fill:"none",stroke:P.groundLine,"stroke-width":1.2,opacity:.6}));
+  });
+
+  // --- the ground beyond the perimeter, cut from the same plot -------------
+  var outside=[[16,b.gy0-M],[b.gx1+M,b.gy0-M],[b.gx1+M,-2],[16,-2]];
+  outside=clip(outside,function(p){return (p[0]+p[1])-(b.s0-M);});
+  outside=clip(outside,function(p){return (b.s1+M)-(p[0]+p[1]);});
+  outside=clip(outside,function(p){return (p[0]-p[1])-(b.d0-M);});
+  outside=clip(outside,function(p){return (b.d1+M)-(p[0]-p[1]);});
+  if(outside.length>2){
+    var oPts=outside.map(function(q){return iso(q[0],q[1]);});
+    gGround.appendChild(el("polygon",{points:pts(oPts),fill:P.ext,opacity:isDark()?.12:.09}));
+    gGround.appendChild(el("polygon",{points:pts(oPts),fill:"none",stroke:P.ext,
+      "stroke-width":1.8,"stroke-dasharray":"9 7",opacity:.85}));
+    // Park the caption on the plot's back corner: its centroid sits directly
+    // under the gateway building, which is drawn later and would bury it.
+    var top=oPts[0];
+    oPts.forEach(function(q){ if(q[1]<top[1]) top=q; });
+    var fl=el("text",{x:top[0].toFixed(1),y:(top[1]-14).toFixed(1),"text-anchor":"middle",
+      "font-size":"15.5","letter-spacing":"2",fill:P.ext,opacity:.95});
+    fl.textContent="ЗА ПЕРИМЕТРОМ";
+    gGround.appendChild(fl);
+  }
+
+  // --- district labels, parked in the gutter left of each district ---------
+  var dists={};
+  N.forEach(function(n){
+    var bc=base(n);
+    var d=dists[n.dist]||(dists[n.dist]={ys:0,fs:-1e9,fx:0,k:0});
+    d.ys+=bc[1]; d.k++;
+    var front=n.gx+n.gy+n.d;                 // depth of the building's front corner
+    if(front>d.fs){ d.fs=front; d.fx=iso(n.gx+n.w/2,n.gy+n.d); d.rx=iso(n.gx+n.w,n.gy); }
+  });
+  var colX=Math.min.apply(null,planePts.map(function(q){return q[0];}))+22;
+  var col=Object.keys(dists)
+    .filter(function(k){return k!=="Вне периметра" && k!=="Анализ";})
+    .map(function(k){return {name:k,y:dists[k].ys/dists[k].k};})
+    .sort(function(a,c){return a.y-c.y;});
+  var lastY=-1e9;
+  col.forEach(function(c){
+    var y=Math.max(c.y, lastY+30); lastY=y;
+    var t=el("text",{x:colX.toFixed(1),y:(y+6).toFixed(1),"text-anchor":"start",
+      "font-size":"18","letter-spacing":"2.8",fill:P.ink3,opacity:.92});
+    t.textContent=c.name.toUpperCase();
+    gGround.appendChild(t);
+  });
+  // the analysis wing sits off the main axis; label it on its own ground
+  var an=dists["Анализ"];
+  if(an){
+    var at=el("text",{x:(an.rx[0]+26).toFixed(1),y:an.rx[1].toFixed(1),"text-anchor":"start",
+      "font-size":"18","letter-spacing":"2.8",fill:P.ink3,opacity:.92});
+    at.textContent="АНАЛИЗ";
+    gGround.appendChild(at);
+  }
+
+  // --- buildings, painter's order back to front ---
+  var order = N.slice().sort(function(a,b){
+    return ((a.gx+a.w)+(a.gy+a.d)) - ((b.gx+b.w)+(b.gy+b.d));
+  });
+
+  order.forEach(function(n){
+    var col=P[n.cls], h=H(n), on=!!active[n.id], sel=(state.node===n.id);
+    var op = on ? 1 : .4;
+    var gEl=el("g",{class:"bldg",tabindex:"0",role:"button",opacity:op.toFixed(2)});
+    gEl.setAttribute("aria-label",n.label+" — "+n.role);
+
+    var top=mix(col,"#ffffff",isDark()?.10:.16);
+    var left=mix(col,P.dark,.26);
+    var right=mix(col,P.dark,.44);
+
+    // ground shadow
+    var sA=iso(n.gx,n.gy),sB=iso(n.gx+n.w,n.gy),sC=iso(n.gx+n.w,n.gy+n.d),sD=iso(n.gx,n.gy+n.d);
+    gShadow.appendChild(el("polygon",{points:pts([sA,sB,sC,sD]),fill:P.dark,
+      opacity:(on?.16:.05).toFixed(2),transform:"translate(5,4)"}));
+
+    if(n.kind==="drum"){
+      var cx=(sA[0]+sC[0])/2, cy=(sA[1]+sC[1])/2;
+      var rx=(n.w/2)*HW*1.414, ry=(n.w/2)*HH*1.414;
+      gEl.appendChild(el("path",{d:"M "+(cx-rx)+" "+(cy-h)+" L "+(cx-rx)+" "+cy+
+        " A "+rx+" "+ry+" 0 0 0 "+(cx+rx)+" "+cy+" L "+(cx+rx)+" "+(cy-h)+" Z",fill:left}));
+      gEl.appendChild(el("path",{d:"M "+cx+" "+(cy-h)+" L "+(cx+rx)+" "+(cy-h)+" L "+(cx+rx)+" "+cy+
+        " A "+rx+" "+ry+" 0 0 1 "+cx+" "+(cy+ry)+" Z",fill:right,opacity:".92"}));
+      // hoop bands, like a tank
+      [0.34,0.67].forEach(function(f){
+        gEl.appendChild(el("path",{d:"M "+(cx-rx)+" "+(cy-h*f)+" A "+rx+" "+ry+" 0 0 0 "+(cx+rx)+" "+(cy-h*f),
+          fill:"none",stroke:P.dark,"stroke-width":.9,opacity:".22"}));
+      });
+      gEl.appendChild(el("ellipse",{class:"cap",cx:cx,cy:cy-h,rx:rx,ry:ry,fill:top,stroke:mix(col,P.dark,.3),"stroke-width":.8}));
+    } else if(n.kind==="strata"){
+      var lay=3, lh=h/lay;
+      for(var i=0;i<lay;i++){
+        var ins=i*0.22, yb=-i*lh;
+        var aa=iso(n.gx+ins,n.gy+ins), bb=iso(n.gx+n.w-ins,n.gy+ins),
+            cc=iso(n.gx+n.w-ins,n.gy+n.d-ins), dd=iso(n.gx+ins,n.gy+n.d-ins);
+        var up=function(p){return [p[0],p[1]+yb-lh];};
+        var shade=1-i*0.13;
+        gEl.appendChild(el("polygon",{points:pts([up(dd),up(cc),[cc[0],cc[1]+yb],[dd[0],dd[1]+yb]]),fill:mix(left,P.dark,(1-shade))}));
+        gEl.appendChild(el("polygon",{points:pts([up(bb),up(cc),[cc[0],cc[1]+yb],[bb[0],bb[1]+yb]]),fill:mix(right,P.dark,(1-shade))}));
+        gEl.appendChild(el("polygon",{class:i===lay-1?"cap":"",points:pts([up(aa),up(bb),up(cc),up(dd)]),
+          fill:mix(top,P.dark,(1-shade)*.55),stroke:mix(col,P.dark,.35),"stroke-width":.6}));
+      }
+    } else {
+      var A=iso(n.gx,n.gy),B=iso(n.gx+n.w,n.gy),C=iso(n.gx+n.w,n.gy+n.d),D=iso(n.gx,n.gy+n.d);
+      var u=function(p){return [p[0],p[1]-h];};
+      gEl.appendChild(el("polygon",{points:pts([u(D),u(C),C,D]),fill:left}));
+      gEl.appendChild(el("polygon",{points:pts([u(B),u(C),C,B]),fill:right}));
+      gEl.appendChild(el("polygon",{class:"cap",points:pts([u(A),u(B),u(C),u(D)]),fill:top,
+        stroke:mix(col,P.dark,.3),"stroke-width":.8}));
+      // floor lines on the tall faces read as storeys — only where there is room
+      if(h>44){
+        var fl2=Math.min(6,Math.floor(h/16));
+        for(var k=1;k<fl2;k++){
+          var fy=-h*k/fl2;
+          gEl.appendChild(el("line",{x1:D[0],y1:D[1]+fy,x2:C[0],y2:C[1]+fy,stroke:P.dark,"stroke-width":.7,opacity:".16"}));
+          gEl.appendChild(el("line",{x1:B[0],y1:B[1]+fy,x2:C[0],y2:C[1]+fy,stroke:P.dark,"stroke-width":.7,opacity:".16"}));
+        }
+      }
+      if(n.kind==="frame"){
+        var f=1.5;
+        var fA=iso(n.gx-f,n.gy-f),fB=iso(n.gx+n.w+f,n.gy-f),fC=iso(n.gx+n.w+f,n.gy+n.d+f),fD=iso(n.gx-f,n.gy+n.d+f);
+        gEl.appendChild(el("polygon",{points:pts([fA,fB,fC,fD]),fill:"none",stroke:col,
+          "stroke-width":1.4,"stroke-dasharray":"5 4",opacity:".9"}));
+      }
+    }
+
+    // Labels live on their own layer: inside the building group a neighbour
+    // drawn later in painter order would bury them.
+    var ctr=iso(n.gx+n.w/2,n.gy+n.d/2);
+    var ly=ctr[1]-h-((n.w+n.d)/2)*HH-13;
+    var gLab=el("g",{opacity:op.toFixed(2),style:"cursor:pointer"});
+    [[n.label,ly,"20",sel?"600":"500",sel?col:P.ink],
+     [n.sub,ly+17,"14.5","400",P.ink3]].forEach(function(t){
+      var halo=el("text",{x:ctr[0].toFixed(1),y:t[1].toFixed(1),"text-anchor":"middle",
+        "font-size":t[2],"font-weight":t[3],fill:"none",stroke:P.ground,
+        "stroke-width":"4.5","stroke-linejoin":"round",opacity:".9"});
+      halo.textContent=t[0];
+      var txt=el("text",{x:ctr[0].toFixed(1),y:t[1].toFixed(1),"text-anchor":"middle",
+        "font-size":t[2],"font-weight":t[3],fill:t[4]});
+      txt.textContent=t[0];
+      gLab.appendChild(halo); gLab.appendChild(txt);
+    });
+    if(sel) gLab.appendChild(el("circle",{cx:ctr[0],cy:ly-15,r:4,fill:col}));
+    gLabel.appendChild(gLab);
+
+    function pick(){ state.node=(state.node===n.id?null:n.id); paint(); }
+    gEl.addEventListener("click",pick);
+    gLab.addEventListener("click",pick);
+    gEl.addEventListener("keydown",function(ev){
+      if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); pick(); }
+    });
+    gBldg.appendChild(gEl);
+  });
+
+  // --- route edges ---
+  if(route){
+    var seen={};
+    route.hops.forEach(function(hop,i){
+      var a=NB[hop.f], b=NB[hop.t];
+      if(!a||!b) return;
+      var col = hop.tag==="egress" ? P.ext : (hop.tag==="llm" ? P.llm : (hop.tag==="client" ? P.client : P[route.color]));
+      var mk  = hop.tag==="egress" ? "ext" : (hop.tag==="llm" ? "llm" : (hop.tag==="client" ? "client" : route.color));
+      var p0=center(a), p1=center(b);
+
+      if(a.id===b.id){ // self hop — a loop above the roof
+        var lx=p0[0], ly2=p0[1]-34;
+        gEdge.appendChild(el("path",{d:"M "+(lx-24)+" "+(ly2+22)+" C "+(lx-32)+" "+(ly2-18)+", "+(lx+32)+" "+(ly2-18)+", "+(lx+24)+" "+(ly2+22),
+          fill:"none",stroke:col,"stroke-width":2.9,"stroke-linecap":"round","marker-end":"url(#ar-"+mk+")"}));
+        badge(gTop,lx,ly2-10,i+1,col,P);
+        return;
+      }
+
+      // fan out repeated pairs so numbers do not stack
+      var key=[a.id,b.id].sort().join(">");
+      seen[key]=(seen[key]||0)+1;
+      var bend=(seen[key]-1)*34 + 20;
+      var mx=(p0[0]+p1[0])/2, my=(p0[1]+p1[1])/2;
+      var dx=p1[0]-p0[0], dy=p1[1]-p0[1], len=Math.hypot(dx,dy)||1;
+      var nx=-dy/len, ny=dx/len;
+      var cx2=mx+nx*bend, cy2=my+ny*bend;
+
+      gEdge.appendChild(el("path",{d:"M "+p0[0].toFixed(1)+" "+p0[1].toFixed(1)+" Q "+cx2.toFixed(1)+" "+cy2.toFixed(1)+" "+p1[0].toFixed(1)+" "+p1[1].toFixed(1),
+        fill:"none",stroke:P.plate,"stroke-width":7,"stroke-linecap":"round",opacity:".8"}));
+      gEdge.appendChild(el("path",{d:"M "+p0[0].toFixed(1)+" "+p0[1].toFixed(1)+" Q "+cx2.toFixed(1)+" "+cy2.toFixed(1)+" "+p1[0].toFixed(1)+" "+p1[1].toFixed(1),
+        fill:"none",stroke:col,"stroke-width":hop.tag==="egress"?3.4:2.7,
+        "stroke-linecap":"round","stroke-dasharray":hop.tag==="client"?"6 4":null,
+        "marker-end":"url(#ar-"+mk+")"}));
+
+      var t=0.34, u=1-t;
+      badge(gTop, u*u*p0[0]+2*u*t*cx2+t*t*p1[0],
+                  u*u*p0[1]+2*u*t*cy2+t*t*p1[1], i+1, col, P);
+    });
+  }
+
+  // --- viewBox from content ---
+  var bb=svg.getBBox();
+  var pad=34;
+  svg.setAttribute("viewBox",[(bb.x-pad).toFixed(0),(bb.y-pad).toFixed(0),
+    (bb.width+pad*2).toFixed(0),(bb.height+pad*2).toFixed(0)].join(" "));
+}
+
+function badge(g,x,y,n,col,P){
+  g.appendChild(el("circle",{cx:x.toFixed(1),cy:y.toFixed(1),r:14.5,fill:col,stroke:P.plate,"stroke-width":2.4}));
+  var t=el("text",{x:x.toFixed(1),y:(y+5.6).toFixed(1),"text-anchor":"middle",
+    "font-size":"16.5","font-weight":"600",fill:P.plate});
+  t.textContent=n;
+  g.appendChild(t);
+}
+
+// ---- panel -----------------------------------------------------------------
+var CLSNAME={client:"Браузер",app:"Серверный код",cache:"Кэш",store:"Хранилище",llm:"Недетерминированное",ext:"Вне периметра"};
+
+function panel(){
+  var T=document.getElementById("exTitle"), K=document.getElementById("exKind"),
+      S=document.getElementById("exSum"), B=document.getElementById("exBody"),
+      P=document.getElementById("panel");
+
+  if(state.node){
+    var n=NB[state.node];
+    P.style.setProperty("--accent","var(--"+({client:"mint",app:"tat",cache:"azure",store:"slate",llm:"amber",ext:"ember"})[n.cls]+")");
+    T.textContent=n.label;
+    K.textContent=CLSNAME[n.cls]+" · "+n.dist;
+    S.textContent=n.detail;
+    var loc = n.loc ? n.loc.toLocaleString("ru-RU")+" строк" : "не python-модуль";
+    B.innerHTML =
+      '<dl class="dl">'+
+        '<dt>Определение</dt><dd><b>'+esc(n.file)+'</b></dd>'+
+        '<dt>Роль</dt><dd>'+esc(n.role)+'</dd>'+
+        '<dt>Объём</dt><dd>'+esc(loc)+'</dd>'+
+        '<dt>Связи</dt><dd>'+n.links.map(function(l){return '<div class="mono" style="font-size:12.5px;line-height:1.75">'+esc(l)+'</div>';}).join("")+'</dd>'+
+      '</dl>';
+    return;
+  }
+
+  var r=R.filter(function(x){return x.id===state.route;})[0];
+  P.style.setProperty("--accent","var(--"+({client:"mint",app:"tat",cache:"azure",store:"slate",llm:"amber",ext:"ember"})[r.color]+")");
+  T.textContent=r.title;
+  K.textContent=r.kind+" · "+r.hops.length+" переходов";
+  S.textContent=r.sum;
+  B.innerHTML='<ol class="hops">'+r.hops.map(function(h,i){
+    var a=NB[h.f], b=NB[h.t];
+    var tag = h.tag==="egress" ? '<span class="tag egress">наружу</span>'
+            : h.tag==="llm"    ? '<span class="tag llm">ответ модели</span>'
+            : h.tag==="client" ? '<span class="tag client">через браузер</span>' : '';
+    var route_ = a.id===b.id ? esc(a.label)+' <span class="arrow">↺</span>'
+                             : esc(a.label)+' <span class="arrow">→</span> '+esc(b.label);
+    return '<li><div class="num">'+(i+1)+'</div><div>'+
+      '<div class="hop-t">'+route_+tag+'</div>'+
+      '<div class="hop-p">'+esc(h.p)+'</div>'+
+      '<div class="cite">'+h.c.map(function(c){return '<span>'+esc(c)+'</span>';}).join("")+'</div>'+
+    '</div></li>';
+  }).join("")+'</ol>';
+}
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+
+// ---- chips, legend, index --------------------------------------------------
+var CVAR={client:"var(--mint)",app:"var(--tat)",cache:"var(--azure)",store:"var(--slate)",llm:"var(--amber)",ext:"var(--ember)"};
+function chips(){
+  var c=document.getElementById("chips");
+  c.innerHTML="";
+  R.forEach(function(r){
+    var b=document.createElement("button");
+    b.className="chip"; b.type="button";
+    b.style.setProperty("--chip",CVAR[r.color]);
+    b.setAttribute("aria-pressed", String(state.route===r.id && !state.node));
+    b.textContent=r.id+" · "+r.name;
+    b.addEventListener("click",function(){ state.route=r.id; state.node=null; paint(); });
+    c.appendChild(b);
+  });
+}
+["lgClient|mint","lgApp|tat","lgCache|azure","lgStore|slate","lgLlm|amber","lgExt|ember","lgEg|ember"].forEach(function(s){
+  var p=s.split("|"), e=document.getElementById(p[0]);
+  if(e) e.style.color="var(--"+p[1]+")";
+});
+
+(function index(){
+  var tb=document.getElementById("idxBody");
+  N.slice().sort(function(a,b){ return (b.loc||0)-(a.loc||0); }).forEach(function(n){
+    var tr=document.createElement("tr");
+    tr.innerHTML='<td><span class="swatch" style="background:'+CVAR[n.cls]+'"></span>'+esc(n.label)+'</td>'+
+      '<td class="f">'+esc(n.file)+'</td>'+
+      '<td class="n">'+(n.loc?n.loc.toLocaleString("ru-RU"):"—")+'</td>'+
+      '<td class="r">'+esc(n.role)+'</td>';
+    tb.appendChild(tr);
+  });
+})();
+
+function paint(){ render(); panel(); chips(); }
+paint();
+
+var mq=window.matchMedia("(prefers-color-scheme: dark)");
+(mq.addEventListener?mq.addEventListener.bind(mq,"change"):mq.addListener.bind(mq))(paint);
+new MutationObserver(paint).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+
+})();
+</script>
